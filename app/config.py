@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     @classmethod
     def _require_asyncpg_driver(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().startswith("postgresql+asyncpg://"):
-            raise ValueError("DATABASE_URL must use the postgresql+asyncpg:// schema")
+            raise ValueError("DATABASE_URL must use the postgresql+asyncpg:// scheme")
         return value
 
     @field_validator("redis_url")
