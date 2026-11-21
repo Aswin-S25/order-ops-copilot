@@ -32,7 +32,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 |---|---|---|
 | 1.1 | Project layout, dependency management (uv: `pyproject.toml` + `uv.lock`), `.gitignore`, `.env.example`, typed settings (`pydantic-settings`), first unit tests, ruff | ✅ Done (commit 8359c22) |
 | 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
-| 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | Pending |
+| 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | In progress: code verified in a scratch copy (16 tests pass); user is typing it |
 | 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | Pending |
 | 1.5 | SQLAlchemy models for the core tables | Pending |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test | Pending |
@@ -81,6 +81,8 @@ None open. The Step 1.1 review findings were fixed in commit 8359c22: docs are t
 
 - [x] Docker Desktop 4.99 running (engine 29.9.3, Compose v5.7.0, arm64). Rosetta 2 installed for amd64 images. CLI is in `~/.docker/bin`, which is on PATH via `~/.zprofile` (2026-11-22).
 - [x] Commit `docs/` (commit 8359c22).
+
+- [ ] Decide on the test-client dependency. Starlette 1.10 warns that `httpx` with TestClient is deprecated and suggests `httpx2`. Verify `httpx2` on PyPI (maintainer, project links) before adopting it, because a one-character name change is a typosquatting pattern. Until then, stay on `httpx` (warning only).
 
 ## Next implementation step
 
