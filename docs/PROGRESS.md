@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.1)**
+**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.3 next)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -30,8 +30,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 | Step | Scope | Status |
 |---|---|---|
-| 1.1 | Project layout, dependency management (uv: `pyproject.toml` + `uv.lock`), `.gitignore`, `.env.example`, typed settings (`pydantic-settings`), first unit tests, ruff | In progress |
-| 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | Pending |
+| 1.1 | Project layout, dependency management (uv: `pyproject.toml` + `uv.lock`), `.gitignore`, `.env.example`, typed settings (`pydantic-settings`), first unit tests, ruff | ✅ Done (commit 8359c22) |
+| 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
 | 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | Pending |
 | 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | Pending |
 | 1.5 | SQLAlchemy models for the core tables | Pending |
@@ -40,7 +40,9 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 ## Implemented features
 
-None yet.
+- **Typed settings** (`app/config.py`): loaded once and validated at startup. Secrets (including database and Redis URLs) are `SecretStr`, input is hidden in validation errors, and settings are frozen.
+- **Local infrastructure** (`docker-compose.yml`): Postgres 17.12 + pgvector 0.8.7 on `127.0.0.1:5433`, and Redis 7.4 on `127.0.0.1:6379` with persistence disabled on purpose (ADR-0002).
+- **Database roles** (`infra/postgres/init/01-roles-and-databases.sh`): `app_owner` (owns the schema, used for migrations) and `app_user` (runtime; no DDL, no BYPASSRLS). Default privileges mean future tables are automatically granted SELECT/INSERT/UPDATE/DELETE to `app_user`. Databases: `orderops` and `orderops_test`.
 
 ## Decisions log
 
@@ -48,7 +50,7 @@ None yet.
 
 ## Database changes
 
-None yet.
+- 2026-11-22: Cluster initialised by the init script. Created roles `app_owner` and `app_user` (both NOSUPERUSER, NOBYPASSRLS), databases `orderops` and `orderops_test` (owned by `app_owner`, CONNECT revoked from PUBLIC), extension `vector` in both, and default privileges for `app_user`. No application tables yet.
 
 ## Tests and results
 
@@ -57,21 +59,29 @@ None yet.
 | 2026-11-22 | 1.1 | `pytest` | 5 passed (test_config.py) |
 | 2026-11-22 | 1.1 | `ruff check .` / `ruff format --check .` | Clean |
 | 2026-11-22 | 1.1 | Load real `.env` through `get_settings()` (values not printed) | Loads OK |
+| 2026-11-22 | 1.2 | `docker compose up -d` → `ps` | postgres and redis both `healthy` |
+| 2026-11-22 | 1.2 | Role flags | `app_owner` and `app_user`: rolsuper, rolbypassrls, rolcreatedb and rolcreaterole all false |
+| 2026-11-22 | 1.2 | Database ACLs | Only `app_owner` and `app_user` may CONNECT; PUBLIC may not |
+| 2026-11-22 | 1.2 | NEGATIVE: `app_user` CREATE TABLE | `permission denied for schema public` ✅ |
+| 2026-11-22 | 1.2 | Default privileges probe (`orderops_test`, rolled back) | `app_user` INSERT and SELECT ok; TRUNCATE denied; DROP denied (`must be owner`) ✅ |
+| 2026-11-22 | 1.2 | Host connection via `get_settings().database_url` | user=app_user, db=orderops, server 17.12, vector 0.8.7 (the container, not the local Postgres on 5432) ✅ |
+| 2026-11-22 | 1.2 | Redis via `REDIS_URL` | PING ok; save disabled; appendonly no ✅ |
+| 2026-11-22 | 1.1 (after fixes) | `uv run pytest` · `ruff check` · `ruff format --check` | 5 passed · clean (line length 100, rules E/F/I/B/UP/S/ASYNC) · clean |
 
 ## Known bugs / issues
 
-Second Step 1.1 review (2026-11-22):
-- **[blocking, regression]** The `[tool.pytest.ini_options]` and `[tool.ruff]` sections are missing from `pyproject.toml` (they were dropped in commit 69a1b05). `pytest` now fails at collection with `ModuleNotFoundError: No module named 'app'`. ruff falls back to its defaults (only the E/F rules, line length 88), so "All checks passed" is misleading.
-- **[blocking]** `.gitignore` still contains `docs/`. 0 files under docs/ are tracked, even though commit 69a1b05 says "Add Phase 0 design docs".
-- **[open]** Step 1.2 files (`docker-compose.yml`, `infra/postgres/init/…`, the new `.env` keys) don't exist yet. Docker is still not installed.
-- **[nit]** The `app/config.py:30` error message says "schema" where it should say "scheme".
-- Fixed: uv migration (`[project]`, `[dependency-groups]`, `uv.lock`, requirements files removed) ✅
+None open. The Step 1.1 review findings were fixed in commit 8359c22: docs are tracked, the pytest and ruff config is restored (ruff targets py312), and the "scheme" typo is corrected.
+
+**Environment notes:**
+- A separate local Postgres is listening on `127.0.0.1:5432` and `[::1]:5432`. The project's Postgres is therefore exposed on **5433**, and every URL uses `127.0.0.1` rather than `localhost`.
+
+**Lesson recorded:** when a config file is partly replaced, other sections can vanish without warning. ruff with no config still reported "All checks passed" while checking almost nothing. Run `uv run pytest && uv run ruff check . && uv run ruff format --check .` and `git show --stat HEAD` around every commit.
 
 ## Pending tasks
 
-- [ ] Install or start Docker (Docker Desktop, OrbStack or Colima). The `docker` command is not on PATH. This is needed for Step 1.2.
-- [ ] Commit `docs/` once `.gitignore` is fixed. The repo has 2 commits, but neither includes the docs.
+- [x] Docker Desktop 4.99 running (engine 29.9.3, Compose v5.7.0, arm64). Rosetta 2 installed for amd64 images. CLI is in `~/.docker/bin`, which is on PATH via `~/.zprofile` (2026-11-22).
+- [x] Commit `docs/` (commit 8359c22).
 
 ## Next implementation step
 
-Close out Step 1.1 by fixing the review findings. Then Step 1.2: Docker Compose (Postgres + pgvector, Redis) and the database-roles init script. Docker must be installed first.
+Step 1.3: FastAPI app factory, structured JSON logging (structlog), request-id middleware and the error envelope.

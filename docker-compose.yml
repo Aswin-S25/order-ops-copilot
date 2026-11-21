@@ -1,0 +1,40 @@
+name: order-ops-copilot
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17 # Postgres 17 with the vector extension available
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      APP_OWNER_PASSWORD: ${APP_OWNER_PASSWORD:?set APP_OWNER_PASSWORD in .env}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:?set APP_USER_PASSWORD in .env}
+    ports:
+      # Host 5433 → container 5432. Host 5432 is taken by a local Postgres;
+      # always connect via 127.0.0.1 (localhost may resolve to ::1 = the other server).
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 forces TCP: the init-time temporary server is socket-only,
+      # so this only passes once initialisation has really finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d orderops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    # No persistence: Redis is disposable (ADR-0002). Restarts exercise recovery.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
