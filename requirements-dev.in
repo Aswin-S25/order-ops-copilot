@@ -1,4 +1,0 @@
--c requirements.txt       # use exactly the same pins as runtime
--r requirements.in
-pytest>=8.3
-ruff>=0.8
