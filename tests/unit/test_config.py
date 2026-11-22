@@ -56,3 +56,14 @@ def test_settings_are_immutable(env: pytest.MonkeyPatch) -> None:
     settings = load()
     with pytest.raises(ValidationError):
         settings.log_level = "DEBUG"
+
+
+@pytest.mark.parametrize(
+    "variable",
+    ["DB_CONNECT_TIMEOUT_SECONDS", "DB_POOL_TIMEOUT_SECONDS", "HEALTH_CHECK_TIMEOUT_SECONDS"],
+)
+def test_zero_timeouts_are_rejected(env: pytest.MonkeyPatch, variable: str) -> None:
+    # A zero timeout passes a naive check but makes every connection attempt fail.
+    env.setenv(variable, "0")
+    with pytest.raises(ValidationError):
+        load()

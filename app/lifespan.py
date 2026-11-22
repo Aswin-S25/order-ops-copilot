@@ -31,6 +31,6 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         finally:
             await redis.aclose()
             await engine.dispose()
-            logger.info("shutdown_complete")
+            logger.info("shutdown_completed")
 
     return lifespan

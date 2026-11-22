@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.4 fixes, then Step 1.5a)**
+**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.5a)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -33,7 +33,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 1.1 | Project layout, dependency management (uv: `pyproject.toml` + `uv.lock`), `.gitignore`, `.env.example`, typed settings (`pydantic-settings`), first unit tests, ruff | ✅ Done (commit 8359c22) |
 | 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
 | 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | ✅ Done (commit 836d71f) |
-| 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | Typed and passing (22 tests). Review: 1 bug to fix (`ge=0` timeout), then commit |
+| 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | ✅ Done (commit d339780 + fix commit) |
 | 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | In progress: verified in a scratch copy (59 tests + 11 constraint checks against real Postgres) |
 | 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | Pending |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test | Pending |
@@ -73,6 +73,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.2 | Redis via `REDIS_URL` | PING ok; save disabled; appendonly no ✅ |
 | 2026-11-22 | 1.4 | `uv run pytest` (Docker up) / `-m "not integration"` | 22 passed / 20 passed, 2 deselected |
 | 2026-11-22 | 1.4 review | `db_connect_timeout_seconds=0` against real Postgres | Settings accepted it; connection FAILED with `TimeoutError` (bug confirmed) |
+| 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
 | 2026-11-22 | 1.3 | `uv run pytest` | 16 passed (11 new in test_app.py), 1 warning (`httpx2` deprecation) |
@@ -81,10 +82,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 ## Known bugs / issues
 
-From the Step 1.4 review (2026-11-22):
-- **[bug]** In `app/config.py`, `db_connect_timeout_seconds` uses `ge=0`, so `0` passes validation. Verified against the real database: with `0`, **every** connection fails with `TimeoutError`, even though the database is healthy. Fix: `gt=0`, plus a regression test (`test_zero_timeouts_are_rejected`, which was mutation-checked).
-- **[nit]** Log event names are inconsistent: `startup_completed` but `shutdown_complete`.
-- Step 1.4 is not committed yet.
+None open. Step 1.4 review findings fixed on 2026-11-22: `db_connect_timeout_seconds` is `gt=0` again, with the regression test `test_zero_timeouts_are_rejected` (mutation-checked), and the event name is now `shutdown_completed`.
 
 **Environment notes:**
 - A separate local Postgres is listening on `127.0.0.1:5432` and `[::1]:5432`. The project's Postgres is therefore exposed on **5433**, and every URL uses `127.0.0.1` rather than `localhost`.
@@ -102,4 +100,4 @@ From the Step 1.4 review (2026-11-22):
 
 ## Next implementation step
 
-Fix the Step 1.4 review findings and commit. Then Step 1.5a: base, naming convention, and the identity and commerce models.
+Step 1.5a: the user is typing `db/base.py`, `db/models.py` and `tests/unit/test_models.py`. Then a review, including the 11 constraint checks against real Postgres.
