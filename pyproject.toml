@@ -29,6 +29,9 @@ package = false   # this is an application, not a library: don't build or instal
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers --import-mode=importlib"
+markers = [
+    "integration: needs the Docker Compose stack (Postgres + Redis)",
+]
 
 [tool.ruff]
 line-length = 100

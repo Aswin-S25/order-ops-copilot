@@ -1,27 +1,14 @@
 import json
 import re
-from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from app.config import Settings
 from app.errors import NotFoundError
 from app.main import create_app
-
-
-def make_settings(**overrides: Any) -> Settings:
-    values: dict[str, Any] = {
-        "env": "test",
-        "database_url": "postgresql+asyncpg://u:p@127.0.0.1:5433/db",
-        "redis_url": "redis://127.0.0.1:6379/0",
-        "openai_api_key": "sk-test",
-        "openai_model": "test-model",
-        **overrides,
-    }
-    return Settings(_env_file=None, **values)
+from tests.support import make_settings
 
 
 class Item(BaseModel):

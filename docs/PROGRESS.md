@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.3 next)**
+**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.4 fixes, then Step 1.5a)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -32,15 +32,20 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 |---|---|---|
 | 1.1 | Project layout, dependency management (uv: `pyproject.toml` + `uv.lock`), `.gitignore`, `.env.example`, typed settings (`pydantic-settings`), first unit tests, ruff | ✅ Done (commit 8359c22) |
 | 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
-| 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | In progress: code verified in a scratch copy (16 tests pass); user is typing it |
-| 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | Pending |
-| 1.5 | SQLAlchemy models for the core tables | Pending |
+| 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | ✅ Done (commit 836d71f) |
+| 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | Typed and passing (22 tests). Review: 1 bug to fix (`ge=0` timeout), then commit |
+| 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | In progress: verified in a scratch copy (59 tests + 11 constraint checks against real Postgres) |
+| 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | Pending |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test | Pending |
 | 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Pending |
 
 ## Implemented features
 
 - **Typed settings** (`app/config.py`): loaded once and validated at startup. Secrets (including database and Redis URLs) are `SecretStr`, input is hidden in validation errors, and settings are frozen.
+- **App factory** (`app/main.py`): `create_app(settings)`, run with `uvicorn app.main:create_app --factory`.
+- **Structured logging** (`app/logging_config.py`): structlog and stdlib logging share one pipeline. JSON in test/prod, console in dev. Every line includes `request_id` (via contextvars) and the logger name. Tracebacks are plain text with no local variables.
+- **Request context middleware** (`app/middleware.py`): pure ASGI. Validates or generates `X-Request-ID`, writes one access log line per request (path only), and returns a safe 500 for unexpected exceptions.
+- **Error envelope** (`app/errors.py`): every error is `{"error": {code, message, request_id, details?}}`. Validation errors never echo the submitted input. Framework headers (e.g. `Allow`) are preserved.
 - **Local infrastructure** (`docker-compose.yml`): Postgres 17.12 + pgvector 0.8.7 on `127.0.0.1:5433`, and Redis 7.4 on `127.0.0.1:6379` with persistence disabled on purpose (ADR-0002).
 - **Database roles** (`infra/postgres/init/01-roles-and-databases.sh`): `app_owner` (owns the schema, used for migrations) and `app_user` (runtime; no DDL, no BYPASSRLS). Default privileges mean future tables are automatically granted SELECT/INSERT/UPDATE/DELETE to `app_user`. Databases: `orderops` and `orderops_test`.
 
@@ -66,11 +71,20 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.2 | Default privileges probe (`orderops_test`, rolled back) | `app_user` INSERT and SELECT ok; TRUNCATE denied; DROP denied (`must be owner`) ✅ |
 | 2026-11-22 | 1.2 | Host connection via `get_settings().database_url` | user=app_user, db=orderops, server 17.12, vector 0.8.7 (the container, not the local Postgres on 5432) ✅ |
 | 2026-11-22 | 1.2 | Redis via `REDIS_URL` | PING ok; save disabled; appendonly no ✅ |
+| 2026-11-22 | 1.4 | `uv run pytest` (Docker up) / `-m "not integration"` | 22 passed / 20 passed, 2 deselected |
+| 2026-11-22 | 1.4 review | `db_connect_timeout_seconds=0` against real Postgres | Settings accepted it; connection FAILED with `TimeoutError` (bug confirmed) |
+| 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
+| 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-22 | 1.3 | `uv run pytest` | 16 passed (11 new in test_app.py), 1 warning (`httpx2` deprecation) |
+| 2026-11-22 | 1.3 review | Mutation check: remove `add_logger_name` | The new `logger` assertion fails with `KeyError: 'logger'`, so the test now guards against that regression ✅ |
 | 2026-11-22 | 1.1 (after fixes) | `uv run pytest` · `ruff check` · `ruff format --check` | 5 passed · clean (line length 100, rules E/F/I/B/UP/S/ASYNC) · clean |
 
 ## Known bugs / issues
 
-None open. The Step 1.1 review findings were fixed in commit 8359c22: docs are tracked, the pytest and ruff config is restored (ruff targets py312), and the "scheme" typo is corrected.
+From the Step 1.4 review (2026-11-22):
+- **[bug]** In `app/config.py`, `db_connect_timeout_seconds` uses `ge=0`, so `0` passes validation. Verified against the real database: with `0`, **every** connection fails with `TimeoutError`, even though the database is healthy. Fix: `gt=0`, plus a regression test (`test_zero_timeouts_are_rejected`, which was mutation-checked).
+- **[nit]** Log event names are inconsistent: `startup_completed` but `shutdown_complete`.
+- Step 1.4 is not committed yet.
 
 **Environment notes:**
 - A separate local Postgres is listening on `127.0.0.1:5432` and `[::1]:5432`. The project's Postgres is therefore exposed on **5433**, and every URL uses `127.0.0.1` rather than `localhost`.
@@ -84,6 +98,8 @@ None open. The Step 1.1 review findings were fixed in commit 8359c22: docs are t
 
 - [ ] Decide on the test-client dependency. Starlette 1.10 warns that `httpx` with TestClient is deprecated and suggests `httpx2`. Verify `httpx2` on PyPI (maintainer, project links) before adopting it, because a one-character name change is a typosquatting pattern. Until then, stay on `httpx` (warning only).
 
+- [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
+
 ## Next implementation step
 
-Step 1.3: FastAPI app factory, structured JSON logging (structlog), request-id middleware and the error envelope.
+Fix the Step 1.4 review findings and commit. Then Step 1.5a: base, naming convention, and the identity and commerce models.

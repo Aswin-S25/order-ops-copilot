@@ -19,6 +19,11 @@ class Settings(BaseSettings):
 
     database_url: SecretStr
     redis_url: SecretStr
+    db_pool_size: int = Field(default=5, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+    db_pool_timeout_seconds: float = Field(default=5.0, gt=0)
+    db_connect_timeout_seconds: float = Field(default=5.0, ge=0)
+    health_check_timeout_seconds: float = Field(default=2.0, gt=0)
 
     openai_api_key: SecretStr
     openai_model: str = Field(min_length=1)
