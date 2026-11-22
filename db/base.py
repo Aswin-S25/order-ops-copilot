@@ -3,8 +3,10 @@
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, MetaData, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Deterministic constraint and index names. Alembic needs stable names to alter or
@@ -22,7 +24,11 @@ NAMING_CONVENTION = {
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
     # Every Mapped[datetime] becomes TIMESTAMPTZ: a naive timestamp cannot be declared by accident.
-    type_annotation_map = {datetime: DateTime(timezone=True)}
+    type_annotation_map = {
+        datetime: DateTime(timezone=True),
+        dict[str, Any]: JSONB,
+        list[dict[str, Any]]: JSONB,
+    }
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:

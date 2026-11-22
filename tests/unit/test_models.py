@@ -1,8 +1,9 @@
 """Structural tests: the schema's safety rules are checked by code, not by memory."""
 
 import pytest
-from sqlalchemy import BigInteger, DateTime, ForeignKeyConstraint, Table
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKeyConstraint, Table
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from db import models  # noqa: F401  (registers every model on Base.metadata)
@@ -13,8 +14,29 @@ TENANT_OWNED = [t for t in TABLES if t.name != "tenants"]
 POSTGRES_MAX_IDENTIFIER = 63
 
 
-def test_models_are_registered() -> None:
-    assert {"tenants", "users", "orders", "refunds"} <= {t.name for t in TABLES}
+EXPECTED_TABLES = {
+    "tenants",
+    "users",
+    "orders",
+    "order_items",
+    "shipments",
+    "shipment_events",
+    "refunds",
+    "conversations",
+    "messages",
+    "agent_runs",
+    "agent_steps",
+    "approvals",
+    "approval_audit",
+    "audit_log",
+    "memories",
+}
+
+
+def test_exactly_the_expected_tables_are_registered() -> None:
+    # Exact match: a new table must be added here deliberately, which forces a
+    # look at whether it needs tenant_id, RLS and composite FKs like the rest.
+    assert {t.name for t in TABLES} == EXPECTED_TABLES
 
 
 @pytest.mark.parametrize("table", TENANT_OWNED, ids=lambda t: t.name)
@@ -63,3 +85,21 @@ def test_ddl_compiles_and_names_fit_postgres(table: Table) -> None:
     for name in names:
         assert name, f"unnamed constraint/index on {table.name}"
         assert len(str(name)) <= POSTGRES_MAX_IDENTIFIER, f"{name} exceeds 63 chars"
+
+
+@pytest.mark.parametrize("table", TABLES, ids=lambda t: t.name)
+def test_json_columns_are_jsonb(table: Table) -> None:
+    for column in table.columns:
+        if isinstance(column.type, JSON):
+            assert isinstance(column.type, JSONB), f"{table.name}.{column.name} is JSON, not JSONB"
+
+
+@pytest.mark.parametrize("table", TABLES, ids=lambda t: t.name)
+def test_foreign_key_column_types_match(table: Table) -> None:
+    # Postgres refuses an FK whose two sides differ in type, but only at CREATE TABLE time.
+    # This catches it at unit-test speed instead of at the first migration.
+    dialect = postgresql.dialect()
+    for fk in table.foreign_keys:
+        local = fk.parent.type.compile(dialect=dialect)
+        remote = fk.column.type.compile(dialect=dialect)
+        assert local == remote, f"{table.name}.{fk.parent.name} is {local}, references {remote}"

@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.5a)**
+**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.5b)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -34,8 +34,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
 | 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | ✅ Done (commit 836d71f) |
 | 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | ✅ Done (commit d339780 + fix commit) |
-| 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | ✅ Reviewed and approved 2026-11-22 (identical to the verified version; waiting for commit) |
-| 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | Pending |
+| 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | ✅ Done (commit dcae748) |
+| 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | Done (awaiting commit): typed by the user, reviewed and fixed. 129 tests pass; happy path + 18/18 violations rejected on the user's models |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test | Pending |
 | 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Pending |
 
@@ -78,6 +78,11 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-22 | 1.5b review | Typed models: `create_all` on orderops_test | **Failed** before the fix: `fk_messages_tenant_id_run_id_agent_runs cannot be implemented` (`messages.run_id` typed TEXT, NOT NULL; `content` missing). All 112 unit tests still passed |
+| 2026-11-22 | 1.5b review | New test `test_foreign_key_column_types_match` | Fails on the buggy models (`messages.run_id is TEXT, references UUID`), passes 15/15 on the correct ones ✅ |
+| 2026-11-22 | 1.5b review (after fix) | `uv run pytest` · ruff · real Postgres | 129 passed · clean · `create_all` OK, happy path OK, 18/18 rejected, 0 tables remain |
+| 2026-11-22 | 1.5b (scratch) | Unit suite | 112 passed, 2 deselected; ruff clean (one S105 false positive suppressed inline) |
+| 2026-11-22 | 1.5b (scratch) | Real Postgres (orderops_test as app_owner, rolled back) | 15 tables plus an HNSW index. Happy path conversation → run → steps → approval (approved → consumed) → refund → completed succeeds. output_items JSONB round-trips identically. clock_timestamp gives distinct times within one transaction. Cosine search returns the nearest memory. 18/18 violations rejected (no approval, double refund, duplicate approval, self-approval, decision fields, consumed_at, expiry, cross-tenant run, missing or extra stop_reason, partial lease, cross-tenant principal, step shape ×2, duplicate call_id, duplicate seq, memory length, vector dimension). 0 tables remain |
 | 2026-11-22 | 1.5a review | Unit / full suite (user's files) | 57 passed, 2 deselected / 59 passed; ruff clean |
 | 2026-11-22 | 1.5a review | 11 constraint checks on the user's models (orderops_test, rolled back) | 11/11 rejected by the named constraint; enum stored as its value (`'delivered'`); 0 tables remain |
 | 2026-11-22 | 1.5a review | Mutation: single-column `shipments.order_id` FK | Caught: `fk_shipments_order_id_orders on shipments omits tenant_id` ✅ |
@@ -87,7 +92,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 ## Known bugs / issues
 
-None open. Step 1.4 review findings fixed on 2026-11-22: `db_connect_timeout_seconds` is `gt=0` again, with the regression test `test_zero_timeouts_are_rejected` (mutation-checked), and the event name is now `shutdown_completed`.
+None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it for this time"): `Message.content` restored, `Message.run_id` is `UUID | None` (it was TEXT and NOT NULL, so the FK could not be created), `Converstaion` renamed to `Conversation`, the S105 `noqa` restored, and the stale Refund docstring updated. The FK type-match test closes the gap that let this pass 112 unit tests. Step 1.4 review findings fixed on 2026-11-22: `db_connect_timeout_seconds` is `gt=0` again, with the regression test `test_zero_timeouts_are_rejected` (mutation-checked), and the event name is now `shutdown_completed`.
 
 **Environment notes:**
 - A separate local Postgres is listening on `127.0.0.1:5432` and `[::1]:5432`. The project's Postgres is therefore exposed on **5433**, and every URL uses `127.0.0.1` rather than `localhost`.
@@ -101,8 +106,9 @@ None open. Step 1.4 review findings fixed on 2026-11-22: `db_connect_timeout_sec
 
 - [ ] Decide on the test-client dependency. Starlette 1.10 warns that `httpx` with TestClient is deprecated and suggests `httpx2`. Verify `httpx2` on PyPI (maintainer, project links) before adopting it, because a one-character name change is a typosquatting pattern. Until then, stay on `httpx` (warning only).
 
+- [ ] Optional: use `SHA256_HEX` in the Refund idempotency CHECK (the regex is currently duplicated), and restore the 1.5b "why" comments, especially the `clock_timestamp()` one on `Message.created_at`.
 - [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
 
 ## Next implementation step
 
-Commit Step 1.5a. Then Step 1.5b: the agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories with pgvector) and the refund links to approvals and runs.
+Commit Step 1.5b. Then Step 1.6: Alembic (async env, run as app_owner), baseline migration, an upgrade/downgrade test, and REVOKE UPDATE/DELETE on the audit tables.
