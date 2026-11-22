@@ -34,7 +34,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 1.2 | Docker Compose: Postgres + pgvector, Redis, database roles (`app_owner`, `app_user`) init script | ✅ Done (verified 2026-11-22) |
 | 1.3 | FastAPI app factory, structured JSON logging (structlog), request-id middleware, error envelope | ✅ Done (commit 836d71f) |
 | 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | ✅ Done (commit d339780 + fix commit) |
-| 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | In progress: verified in a scratch copy (59 tests + 11 constraint checks against real Postgres) |
+| 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | ✅ Reviewed and approved 2026-11-22 (identical to the verified version; waiting for commit) |
 | 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | Pending |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test | Pending |
 | 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Pending |
@@ -46,6 +46,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **Structured logging** (`app/logging_config.py`): structlog and stdlib logging share one pipeline. JSON in test/prod, console in dev. Every line includes `request_id` (via contextvars) and the logger name. Tracebacks are plain text with no local variables.
 - **Request context middleware** (`app/middleware.py`): pure ASGI. Validates or generates `X-Request-ID`, writes one access log line per request (path only), and returns a safe 500 for unexpected exceptions.
 - **Error envelope** (`app/errors.py`): every error is `{"error": {code, message, request_id, details?}}`. Validation errors never echo the submitted input. Framework headers (e.g. `Allow`) are preserved.
+- **ORM models, identity and commerce** (`db/base.py`, `db/models.py`): tenants, users, orders, order_items, shipments, shipment_events, refunds. Includes a naming convention, timestamps that are always TIMESTAMPTZ, statuses stored as VARCHAR + CHECK, composite tenant-scoped foreign keys (plus currency for items and refunds), and a unique idempotency key on refunds. No tables exist in the database yet; that's Step 1.6.
+- **Structural schema tests** (`tests/unit/test_models.py`): tenant_id on every table, tenant_id in every reference between tenant tables, money as BIGINT with currency, timezone-aware timestamps, DDL compiles and names are ≤ 63 characters.
 - **Local infrastructure** (`docker-compose.yml`): Postgres 17.12 + pgvector 0.8.7 on `127.0.0.1:5433`, and Redis 7.4 on `127.0.0.1:6379` with persistence disabled on purpose (ADR-0002).
 - **Database roles** (`infra/postgres/init/01-roles-and-databases.sh`): `app_owner` (owns the schema, used for migrations) and `app_user` (runtime; no DDL, no BYPASSRLS). Default privileges mean future tables are automatically granted SELECT/INSERT/UPDATE/DELETE to `app_user`. Databases: `orderops` and `orderops_test`.
 
@@ -76,6 +78,9 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-22 | 1.5a review | Unit / full suite (user's files) | 57 passed, 2 deselected / 59 passed; ruff clean |
+| 2026-11-22 | 1.5a review | 11 constraint checks on the user's models (orderops_test, rolled back) | 11/11 rejected by the named constraint; enum stored as its value (`'delivered'`); 0 tables remain |
+| 2026-11-22 | 1.5a review | Mutation: single-column `shipments.order_id` FK | Caught: `fk_shipments_order_id_orders on shipments omits tenant_id` ✅ |
 | 2026-11-22 | 1.3 | `uv run pytest` | 16 passed (11 new in test_app.py), 1 warning (`httpx2` deprecation) |
 | 2026-11-22 | 1.3 review | Mutation check: remove `add_logger_name` | The new `logger` assertion fails with `KeyError: 'logger'`, so the test now guards against that regression ✅ |
 | 2026-11-22 | 1.1 (after fixes) | `uv run pytest` · `ruff check` · `ruff format --check` | 5 passed · clean (line length 100, rules E/F/I/B/UP/S/ASYNC) · clean |
@@ -100,4 +105,4 @@ None open. Step 1.4 review findings fixed on 2026-11-22: `db_connect_timeout_sec
 
 ## Next implementation step
 
-Step 1.5a: the user is typing `db/base.py`, `db/models.py` and `tests/unit/test_models.py`. Then a review, including the 11 constraint checks against real Postgres.
+Commit Step 1.5a. Then Step 1.5b: the agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories with pgvector) and the refund links to approvals and runs.
