@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: IN PROGRESS (Step 1.6)**
+**Phase 1 — Project Foundation and Database: COMPLETE, awaiting sign-off.** Phase 2 starts only after explicit confirmation.
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -26,6 +26,70 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **Remaining issues:**
   - The understanding-check questions (RLS when tests run as a superuser; model pinning on resume; a duplicate worker delivery) are still unanswered. They'll be revisited in Phases 2 and 4.
 
+### Phase 1 — Project Foundation and Database: complete, awaiting the user's sign-off (2026-11-25)
+
+- **What we built:** a running skeleton. It has:
+  - typed settings
+  - a FastAPI app factory with structured logging, request ids and one error envelope
+  - an async Postgres engine and a Redis client, managed by the lifespan
+  - `/health/live` and `/health/ready`
+  - Docker Compose: Postgres 17 + pgvector, and Redis
+  - two database roles
+  - 15 typed models
+  - Alembic migrations (a baseline schema, plus append-only audit privileges)
+  - a deterministic seed: 2 tenants, 8 users and 16 INR orders, including injection fixtures
+- **Concepts covered:**
+  - Settings and secrets: fail-fast typed settings, `SecretStr`, and validation errors that never echo input.
+  - Logging and requests: structlog through the stdlib with contextvars; pure ASGI middleware vs. `BaseHTTPMiddleware`; one error envelope.
+  - Health checks: liveness vs. readiness; lazy pools; the caller owns the deadline (`asyncio.wait_for`).
+  - Least privilege: `app_owner` vs. `app_user`, default privileges, and a separate `MigrationSettings` so the runtime never holds the owner credential.
+  - Schema rules in the database:
+    - a naming convention
+    - TIMESTAMPTZ everywhere
+    - VARCHAR + CHECK instead of native enums
+    - composite tenant-scoped (and currency-scoped) foreign keys
+    - invariants as CHECKs (stop reason iff terminal, maker-checker, step shape)
+    - `clock_timestamp()` vs. `now()`
+    - NULL semantics in UNIQUE constraints and composite FKs
+    - JSONB
+    - pgvector HNSW
+  - Migrations: transactional DDL, `lock_timeout`, offline `--sql` review, and autogenerate's blind spots (CHECK changes, privileges, third-party types).
+  - Testing:
+    - structural tests over metadata
+    - a stairway test with schema+privilege snapshots
+    - a models-vs-migrations drift test
+    - negative *and* positive privilege tests
+    - **mutation testing** to prove that each test can fail
+  - Seed data: deterministic uuid5 ids; idempotency via `ON CONFLICT (id)` only; Argon2id with a salt per user; adversarial fixtures.
+- **Decisions:**
+  - uv and `uv.lock`; Postgres on port 5433 (127.0.0.1).
+  - Alembic configured in `pyproject.toml`, with sequential revision ids.
+  - Privileges are narrowed in migrations.
+  - The seed is deterministic, idempotent and RLS-ready, and refused in prod.
+  - No `relationship()` in the models (async lazy-load trap).
+  - Refunds require an approval at the schema level (`approval_id NOT NULL`).
+- **Tests and results:**
+  - **153 tests** (138 unit, 15 integration); ruff clean.
+  - Real-Postgres checks: 11 + 18 constraint violations rejected.
+  - Mutation runs: 8/8 for migrations and 8/8 for the seed, each re-run on the user's own files.
+  - Roadmap exit criteria met:
+    - `docker compose up` works.
+    - Migrations apply cleanly from empty and downgrade exactly (stairway).
+    - Health and database tests pass.
+- **Bugs caught in review:**
+  - Step 1.4: a zero connect timeout was accepted.
+  - Step 1.5b: an FK type mismatch passed 112 unit tests but could not be created in Postgres. This led to the FK type-match test.
+  - Step 1.6: two downgrade defects escaped the first stairway test, which led to the snapshot-based stairway.
+- **Remaining issues:** none blocking. The optional items are listed under Pending tasks.
+- **Next:** Phase 2, Auth and isolation:
+  - Argon2 login via tenant slug
+  - JWT issue and verify
+  - an `AuthContext` dependency
+  - a tenant-scoped session helper
+  - **RLS policies with FORCE**
+  - ownership checks
+  - security tests: buyer A can't read buyer B's order; tenant A can't see tenant B even with a missing application filter; no tenant context means zero rows
+
 ## Phase 1 plan
 
 | Step | Scope | Status |
@@ -36,8 +100,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 1.4 | Async SQLAlchemy engine and session, Redis client, lifespan management, `/health/live`, `/health/ready` | ✅ Done (commit d339780 + fix commit) |
 | 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | ✅ Done (commit dcae748) |
 | 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | ✅ Done (commit b82f158) |
-| 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test; audit tables append-only for `app_user` | Done (awaiting commit): typed by the user and reviewed. 141 tests pass; 8/8 mutations caught on the user's tests; dev database at 0002 |
-| 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Pending |
+| 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test; audit tables append-only for `app_user` | ✅ Done (commit 6ad0393) |
+| 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Done (awaiting commit): typed by the user and reviewed. 153 tests pass; 8/8 mutations caught on the user's tests; dev database seeded |
 
 ## Implemented features
 
@@ -50,6 +114,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **Structural schema tests** (`tests/unit/test_models.py`): tenant_id on every table, tenant_id in every reference between tenant tables, money as BIGINT with currency, timezone-aware timestamps, DDL compiles and names are ≤ 63 characters.
 - **Migrations** (`db/migrations/`, `[tool.alembic]` in `pyproject.toml`): async `env.py` running as `app_owner` via `MigrationSettings`, `lock_timeout = 5s`, a pgvector render hook, and offline `--sql` mode. `0001_baseline_schema` (autogenerated, reviewed) creates all 15 tables. `0002_runtime_role_privileges` makes `approval_audit` and `audit_log` append-only for `app_user` and hides `alembic_version` from it.
 - **Migration tests**: a single head and offline rendering (unit); a stairway with schema+privilege snapshots, models vs. migrations drift, and runtime-role privilege checks, both negative and positive (integration).
+- **Seed** (`db/seed.py`, `uv run python -m db.seed`): 2 tenants × (4 users, 8 orders covering delivered, in transit, overdue, placed, cancelled, outside the refund window, lost, and an injection note). Deterministic, idempotent, runs as `app_user`, refuses `ENV=prod`.
 - **Local infrastructure** (`docker-compose.yml`): Postgres 17.12 + pgvector 0.8.7 on `127.0.0.1:5433`, and Redis 7.4 on `127.0.0.1:6379` with persistence disabled on purpose (ADR-0002).
 - **Database roles** (`infra/postgres/init/01-roles-and-databases.sh`): `app_owner` (owns the schema, used for migrations) and `app_user` (runtime; no DDL, no BYPASSRLS). Default privileges mean future tables are automatically granted SELECT/INSERT/UPDATE/DELETE to `app_user`. Databases: `orderops` and `orderops_test`.
 
@@ -60,10 +125,13 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **2026-11-22: Alembic is configured in `pyproject.toml` (`[tool.alembic]`), with no `alembic.ini`.** Revision ids are sequential and readable (`--rev-id 0001`). The owner credential is read by a separate `MigrationSettings`, so the runtime `Settings` cannot load it. Migrations connect with `lock_timeout = 5s` and `application_name = order-ops-migrations`. Generated migrations go through `ruff check --fix` and `ruff format` (post-write hooks); E501 is ignored for `db/migrations/versions/*` only.
 - **2026-11-22: privileges are changed in migrations, not in the init script.** The init script grants `app_user` default DML on every new table. Migration 0002 narrows that: `approval_audit` and `audit_log` lose UPDATE/DELETE, and `alembic_version` loses everything.
 
+- **2026-11-25: the seed is deterministic and idempotent.** Ids are `uuid5(SEED_NAMESPACE, name)`, and inserts use `ON CONFLICT (id) DO NOTHING`, so conflicts on any *other* unique column still fail loudly. It runs as `app_user`, one transaction per tenant with `app.tenant_id` set, so it already matches Phase 2's RLS. Demo passwords come from `SEED_USER_PASSWORD` (12+ characters) and are hashed with Argon2id (`argon2-cffi`, ADR-0004). The seed refuses to run with `ENV=prod`. Both tenants deliberately share emails and order numbers, and the data includes two prompt-injection fixtures (a buyer note and a carrier event) for Phases 7 and 8.
+
 ## Database changes
 
 - 2026-11-22: Cluster initialised by the init script. Created roles `app_owner` and `app_user` (both NOSUPERUSER, NOBYPASSRLS), databases `orderops` and `orderops_test` (owned by `app_owner`, CONNECT revoked from PUBLIC), extension `vector` in both, and default privileges for `app_user`. No application tables yet.
 - 2026-11-22: `alembic upgrade head` on the dev database `orderops`: 0001 (15 tables, HNSW index on `memories.embedding`) and 0002 (privileges). As `app_user`: `approval_audit`/`audit_log` SELECT and INSERT only; `alembic_version` no access; `refunds` full DML.
+- 2026-11-25: dev database `orderops` seeded (`python -m db.seed`): 2 tenants, 8 users, 16 orders, 18 items, 12 shipments, 20 events. A second run inserted 0 rows.
 
 ## Tests and results
 
@@ -84,6 +152,13 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-25 | 1.7 review | User's files vs. scratch | `db/seed.py` and both test files identical; `.env.example` lacks the two comment lines above `SEED_USER_PASSWORD` |
+| 2026-11-25 | 1.7 review | `uv run pytest` / `-m "not integration"` · ruff | 153 passed / 138 passed, 15 deselected · clean |
+| 2026-11-25 | 1.7 review | The 8 seed mutations on a copy of the user's tree | 8/8 caught; restored tree 12 passed ✅ |
+| 2026-11-25 | 1.7 review | Dev database as `app_user` | Counts 2/8/16/18/12/20; 8 distinct argon2id hashes; asha@example.com in 2 tenants; ORD-1003 overdue; every order total = sum of its items ✅ |
+| 2026-11-25 | 1.7 (scratch) | `uv run pytest` / `-m "not integration"` · ruff | 153 passed / 138 passed, 15 deselected · clean |
+| 2026-11-25 | 1.7 (scratch) | Mutations: bare ON CONFLICT DO NOTHING · one hash for all users · prod guard removed · random ids · an order owned by support · delivered without delivered_at · last_event_at from the first event · per-tenant email domains | 8/8 caught ✅ |
+| 2026-11-25 | 1.7 (scratch) | `main()` against orderops_test; `ENV=prod python -m db.seed`; missing or short `SEED_USER_PASSWORD` | Re-run inserts 0 rows · exits 1 with `Refusing to seed: ENV=prod` before connecting · ValidationError without echoing the value |
 | 2026-11-22 | 1.6 review | User's files vs. scratch | env.py, tests, support and 0001 (apart from date and banner) identical. Nits: MigrationSettings docstring removed, validator renamed `_required_asyncpg_driver`, 0002 Create Date holds placeholder text, no newline at the end of script.py.mako |
 | 2026-11-22 | 1.6 review | `uv run pytest` / `-m "not integration"` · ruff | 141 passed / 131 passed, 10 deselected · clean |
 | 2026-11-22 | 1.6 review | The 8 mutations on a copy of the user's tree | 8/8 caught; restored tree 8 passed ✅ |
@@ -120,9 +195,10 @@ None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it fo
 
 - [ ] Decide on the test-client dependency. Starlette 1.10 warns that `httpx` with TestClient is deprecated and suggests `httpx2`. Verify `httpx2` on PyPI (maintainer, project links) before adopting it, because a one-character name change is a typosquatting pattern. Until then, stay on `httpx` (warning only).
 
+- [ ] Optional (from the 1.6 review, still open): restore the `MigrationSettings` docstring, rename `_required_asyncpg_driver` to `_require_asyncpg_driver`, replace the 0002 `Create Date` placeholder with `2026-11-22`, and restore the two `.env.example` comments for `SEED_USER_PASSWORD`.
 - [ ] Optional: use `SHA256_HEX` in the Refund idempotency CHECK (the regex is currently duplicated), and restore the 1.5b "why" comments, especially the `clock_timestamp()` one on `Message.created_at`.
 - [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
 
 ## Next implementation step
 
-Commit Step 1.6. Then Step 1.7: a seed script (2 tenants, buyers, support staff, INR orders) and integration tests against real Postgres. That's the last step before the Phase 1 wrap-up.
+Commit Step 1.7 and sign off Phase 1. Then Phase 2, Step 2.1 (planned at the start of Phase 2): password hashing and login via tenant slug.
