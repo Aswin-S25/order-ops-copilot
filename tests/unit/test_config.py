@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import MigrationSettings, Settings
 
 VALID_ENV = {
     "DATABASE_URL": "postgresql+asyncpg://app_user:db-secret@localhost:5432/orderops",
@@ -67,3 +67,18 @@ def test_zero_timeouts_are_rejected(env: pytest.MonkeyPatch, variable: str) -> N
     env.setenv(variable, "0")
     with pytest.raises(ValidationError):
         load()
+
+
+def test_runtime_settings_never_carry_the_owner_credential() -> None:
+    # ADR-0003: the API and workers run as app_user. Even when DATABASE_OWNER_URL is in
+    # the environment, the runtime Settings object has no field that could load it.
+    assert "database_owner_url" not in Settings.model_fields
+
+
+def test_migration_settings_reject_sync_driver_without_leaking_password(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("DATABASE_OWNER_URL", "postgresql://app_owner:owner-secret@127.0.0.1:5433/db")
+    with pytest.raises(ValidationError) as exc_info:
+        MigrationSettings(_env_file=None)
+    assert "owner-secret" not in str(exc_info.value)

@@ -43,6 +43,25 @@ class Settings(BaseSettings):
         return value
 
 
+class MigrationSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+        hide_input_in_errors=True,
+    )
+
+    database_owner_url: SecretStr
+
+    @field_validator("database_owner_url")
+    @classmethod
+    def _required_asyncpg_driver(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().startswith("postgresql+asyncpg://"):
+            raise ValueError("DATABASE_OWNER_URL must use the postgresql+asyncpg:// scheme")
+        return value
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

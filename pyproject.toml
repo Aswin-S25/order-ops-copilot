@@ -45,3 +45,23 @@ select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
+
+# Generated migrations: SQL inside CHECK constraints cannot be wrapped by the formatter.
+"db/migrations/versions/*" = ["E501"]
+
+[tool.alembic]
+script_location = "%(here)s/db/migrations"
+prepend_sys_path = ["."]
+
+# Generated migrations are linted and formatted like hand-written code.
+[[tool.alembic.post_write_hooks]]
+name = "ruff_check"
+type = "module"
+module = "ruff"
+options = "check --fix REVISION_SCRIPT_FILENAME"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff_format"
+type = "module"
+module = "ruff"
+options = "format REVISION_SCRIPT_FILENAME"
