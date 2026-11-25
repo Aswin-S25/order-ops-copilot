@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 1 — Project Foundation and Database: COMPLETE, awaiting sign-off.** Phase 2 starts only after explicit confirmation.
+**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.1)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -26,7 +26,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **Remaining issues:**
   - The understanding-check questions (RLS when tests run as a superuser; model pinning on resume; a duplicate worker delivery) are still unanswered. They'll be revisited in Phases 2 and 4.
 
-### Phase 1 — Project Foundation and Database: complete, awaiting the user's sign-off (2026-11-25)
+### Phase 1 — Project Foundation and Database ✅ (signed off 2026-11-25)
 
 - **What we built:** a running skeleton. It has:
   - typed settings
@@ -101,7 +101,17 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 1.5a | Base, naming convention, column helpers; identity + commerce models (tenants, users, orders, order_items, shipments, shipment_events, refunds); structural tests | ✅ Done (commit dcae748) |
 | 1.5b | Agent and approval models (conversations, messages, agent_runs, agent_steps, approvals, approval_audit, audit_log, memories + pgvector); refunds gain approval and run links | ✅ Done (commit b82f158) |
 | 1.6 | Alembic (async env, run as `app_owner`), baseline migration, upgrade/downgrade test; audit tables append-only for `app_user` | ✅ Done (commit 6ad0393) |
-| 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | Done (awaiting commit): typed by the user and reviewed. 153 tests pass; 8/8 mutations caught on the user's tests; dev database seeded |
+| 1.7 | Seed script (2 tenants, buyers, support staff, orders in INR), integration tests against real Postgres | ✅ Done (commit 4acb286) |
+
+## Phase 2 plan
+
+| Step | Scope | Status |
+|---|---|---|
+| 2.1 | Row-level security: migration 0003 (ENABLE + FORCE + `tenant_isolation` policy on the 14 tenant-owned tables), `db/session.py` (`tenant_session`), RLS integration tests; existing tests made tenant-aware | Typed and reviewed: 162 tests, 8/8 mutations caught on the user's code, dev DB at 0003. Awaiting commit |
+| 2.2 | `app/auth.py`: Argon2id verify (off the event loop) and rehash, HS256 JWT issue and verify, `AuthContext`; JWT settings | Pending |
+| 2.3 | `POST /auth/login` via tenant slug (OD-1) with a uniform 401 for every failure, `GET /auth/me`, session factory in the lifespan | Pending |
+| 2.4 | `AuthContext` dependency, roles and scopes, ownership checks; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see | Pending |
+| 2.5 | Security suite (cross-buyer, cross-tenant, missing filter, no context, token tampering) and the Phase 2 wrap-up | Pending |
 
 ## Implemented features
 
@@ -126,6 +136,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 - **2026-11-22: privileges are changed in migrations, not in the init script.** The init script grants `app_user` default DML on every new table. Migration 0002 narrows that: `approval_audit` and `audit_log` lose UPDATE/DELETE, and `alembic_version` loses everything.
 
 - **2026-11-25: the seed is deterministic and idempotent.** Ids are `uuid5(SEED_NAMESPACE, name)`, and inserts use `ON CONFLICT (id) DO NOTHING`, so conflicts on any *other* unique column still fail loudly. It runs as `app_user`, one transaction per tenant with `app.tenant_id` set, so it already matches Phase 2's RLS. Demo passwords come from `SEED_USER_PASSWORD` (12+ characters) and are hashed with Argon2id (`argon2-cffi`, ADR-0004). The seed refuses to run with `ENV=prod`. Both tenants deliberately share emails and order numbers, and the data includes two prompt-injection fixtures (a buyer note and a carrier event) for Phases 7 and 8.
+
+- **2026-11-25: one RLS policy, `tenant_isolation`, for all roles, on every table with `tenant_id`; `tenants` has none (OD-1).** `ENABLE` + `FORCE`, so the owner is filtered too. The table list is frozen inside migration 0003, not imported from the models. A test derives the expected list from the models, so a future tenant table fails until its migration adds RLS. Sessions come from `db/session.py` `tenant_session()` only: one transaction, `set_config(..., true)`, commit on success, rollback on error, with `expire_on_commit=False`.
 
 ## Database changes
 
@@ -152,6 +164,12 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-25 | 2.1 review | User's files vs. scratch | Migration, support, seed and RLS tests identical. Nits: the migration file is named `003_` (not `0003_`), `db/session.py` has no comments or docstrings, and the snapshot comment in `test_migrations.py` still mentions only GRANTs |
+| 2026-11-25 | 2.1 review | User's tree: ruff · `pytest -m "not integration"` · `pytest` · 8 mutations re-run | clean · 138 passed, 24 deselected · 162 passed · 8/8 caught ✅ |
+| 2026-11-25 | 2.1 review | Dev DB `orderops` as app_user after `alembic upgrade head` | Without a tenant: orders 0, users 0, tenants 2 (directory, no RLS). With each tenant: 8 orders, one distinct tenant_id ✅ |
+| 2026-11-25 | 2.1 (scratch) | Migration 0003 alone, before fixing the tests | 2 seed tests failed (unscoped queries see 0 rows), and `test_passwords_are_stored_as_argon2id_hashes` passed **vacuously** over 0 rows. Fixed with tenant-scoped queries plus a row-count assertion |
+| 2026-11-25 | 2.1 (scratch) | `uv run pytest` / `-m "not integration"` · ruff | 162 passed / 138 passed, 24 deselected · clean |
+| 2026-11-25 | 2.1 (scratch) | Mutations: no NULLIF · no FORCE · WITH CHECK (true) · a table left out · session-level `set_config(..., false)` · no transaction in `tenant_session` · downgrade forgets NO FORCE · downgrade forgets DROP POLICY | 8/8 caught ✅ |
 | 2026-11-25 | 1.7 review | User's files vs. scratch | `db/seed.py` and both test files identical; `.env.example` lacks the two comment lines above `SEED_USER_PASSWORD` |
 | 2026-11-25 | 1.7 review | `uv run pytest` / `-m "not integration"` · ruff | 153 passed / 138 passed, 15 deselected · clean |
 | 2026-11-25 | 1.7 review | The 8 seed mutations on a copy of the user's tree | 8/8 caught; restored tree 12 passed ✅ |
@@ -201,4 +219,4 @@ None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it fo
 
 ## Next implementation step
 
-Commit Step 1.7 and sign off Phase 1. Then Phase 2, Step 2.1 (planned at the start of Phase 2): password hashing and login via tenant slug.
+Commit Step 2.1, then Step 2.2: `app/auth.py` (Argon2 verification off the event loop, rehash on login, HS256 JWT issue and verify, `AuthContext`) and the JWT settings.

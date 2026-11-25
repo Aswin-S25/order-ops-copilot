@@ -56,6 +56,10 @@ SNAPSHOT_QUERIES = (
     "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'",
     "SELECT table_name, privilege_type FROM information_schema.role_table_grants"
     " WHERE grantee = 'app_user'",
+    "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class"
+    " WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'",
+    "SELECT tablename, policyname, roles::text, cmd, qual, with_check FROM pg_policies"
+    " WHERE schemaname = 'public'",
 )
 
 

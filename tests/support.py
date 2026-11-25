@@ -1,12 +1,18 @@
 """Shared test helpers (plain functions, importable as tests.support)."""
 
+import asyncio
+import uuid
 from pathlib import Path
 from typing import Any
 
 from alembic.config import Config
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import MigrationSettings, Settings
+from db.engine import create_engine
+from db.session import create_session_factory, tenant_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATABASE = "orderops_test"
@@ -52,3 +58,28 @@ def alembic_config(database_url: str | None = None) -> Config:
     if database_url is not None:
         config.attributes["database_url"] = database_url
     return config
+
+
+async def empty_test_database() -> None:
+    """Delete all application data in orderops_test. TRUNCATE needs the owner role."""
+    engine = create_async_engine(owner_test_url())
+    try:
+        async with engine.begin() as conn:
+            # CASCADE follows every foreign key that leads to tenants: all application data.
+            await conn.execute(text("TRUNCATE tenants CASCADE"))
+    finally:
+        await engine.dispose()
+
+
+def query_as_tenant(tenant_id: uuid.UUID, sql: str, **params: Any) -> list[Any]:
+    """One query as app_user, inside a transaction scoped to `tenant_id`."""
+
+    async def run() -> list[Any]:
+        engine = create_engine(integration_settings())
+        try:
+            async with tenant_session(create_session_factory(engine), tenant_id) as session:
+                return list((await session.execute(text(sql), params)).all())
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(run())
