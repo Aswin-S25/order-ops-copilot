@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.1)**
+**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.2)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -107,8 +107,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 | Step | Scope | Status |
 |---|---|---|
-| 2.1 | Row-level security: migration 0003 (ENABLE + FORCE + `tenant_isolation` policy on the 14 tenant-owned tables), `db/session.py` (`tenant_session`), RLS integration tests; existing tests made tenant-aware | Typed and reviewed: 162 tests, 8/8 mutations caught on the user's code, dev DB at 0003. Awaiting commit |
-| 2.2 | `app/auth.py`: Argon2id verify (off the event loop) and rehash, HS256 JWT issue and verify, `AuthContext`; JWT settings | Pending |
+| 2.1 | Row-level security: migration 0003 (ENABLE + FORCE + `tenant_isolation` policy on the 14 tenant-owned tables), `db/session.py` (`tenant_session`), RLS integration tests; existing tests made tenant-aware | ✅ Committed (`76e61dc`) |
+| 2.2 | `app/auth.py`: Argon2id verify (off the event loop) and rehash, HS256 JWT issue and verify, `AuthContext`; JWT settings | Typed and reviewed: 192 tests, 14/14 mutations caught on the user's code. Awaiting commit |
 | 2.3 | `POST /auth/login` via tenant slug (OD-1) with a uniform 401 for every failure, `GET /auth/me`, session factory in the lifespan | Pending |
 | 2.4 | `AuthContext` dependency, roles and scopes, ownership checks; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see | Pending |
 | 2.5 | Security suite (cross-buyer, cross-tenant, missing filter, no context, token tampering) and the Phase 2 wrap-up | Pending |
@@ -139,6 +139,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 - **2026-11-25: one RLS policy, `tenant_isolation`, for all roles, on every table with `tenant_id`; `tenants` has none (OD-1).** `ENABLE` + `FORCE`, so the owner is filtered too. The table list is frozen inside migration 0003, not imported from the models. A test derives the expected list from the models, so a future tenant table fails until its migration adds RLS. Sessions come from `db/session.py` `tenant_session()` only: one transaction, `set_config(..., true)`, commit on success, rollback on error, with `expire_on_commit=False`.
 
+- **2026-11-25: access tokens (ADR-0004, refined).** PyJWT, HS256 only, with the algorithm pinned by the server. Claims: `iss`, `aud`, `sub`, `tenant_id`, `role`, `scopes`, `iat`, `exp`, `jti`; all required. `iss` and `aud` were added to the ADR's list so a token minted for another service with the same key is refused. `JWT_SECRET` must be 32+ characters; `ACCESS_TOKEN_TTL_SECONDS` defaults to 900, bounded to 60–3600. Scopes are an explicit allow-list per role (`ROLE_SCOPES`), and verification rejects a token whose scopes exceed what its role allows today. Argon2 hashing and verification run in a worker thread; an unknown user is verified against a dummy hash so timing does not reveal which emails exist; a corrupt stored hash fails closed.
+
 ## Database changes
 
 - 2026-11-22: Cluster initialised by the init script. Created roles `app_owner` and `app_user` (both NOSUPERUSER, NOBYPASSRLS), databases `orderops` and `orderops_test` (owned by `app_owner`, CONNECT revoked from PUBLIC), extension `vector` in both, and default privileges for `app_user`. No application tables yet.
@@ -164,6 +166,10 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-25 | 2.2 review | User's files vs. scratch | Code identical. `app/auth.py`, `app/config.py` and `.env.example` were typed without most of their comments and docstrings; `test_config.py` has the new tests in a different position (no effect) |
+| 2026-11-25 | 2.2 review | User's tree: ruff · `pytest -m "not integration"` · `pytest` · 14 mutations re-run · `.env` checked by key and length only | clean · 168 passed, 24 deselected · 192 passed · 14/14 caught ✅ · `JWT_SECRET` present once, 64 characters |
+| 2026-11-25 | 2.2 (scratch) | `uv run pytest` / `-m "not integration"` · ruff | 192 passed / 168 passed, 24 deselected · clean |
+| 2026-11-25 | 2.2 (scratch) | Mutations: also accept HS512 · audience not verified · `exp` not required · signature not verified · no scope-vs-role check · unknown user returns early · verify on the event loop · hash on the event loop · `return True` for an unknown user · only `VerificationError` caught · buyers may approve · constant `jti` · `JWT_SECRET` without a minimum length · an extra `email` claim | 14/14 caught ✅ |
 | 2026-11-25 | 2.1 review | User's files vs. scratch | Migration, support, seed and RLS tests identical. Nits: the migration file is named `003_` (not `0003_`), `db/session.py` has no comments or docstrings, and the snapshot comment in `test_migrations.py` still mentions only GRANTs |
 | 2026-11-25 | 2.1 review | User's tree: ruff · `pytest -m "not integration"` · `pytest` · 8 mutations re-run | clean · 138 passed, 24 deselected · 162 passed · 8/8 caught ✅ |
 | 2026-11-25 | 2.1 review | Dev DB `orderops` as app_user after `alembic upgrade head` | Without a tenant: orders 0, users 0, tenants 2 (directory, no RLS). With each tenant: 8 orders, one distinct tenant_id ✅ |
@@ -215,8 +221,10 @@ None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it fo
 
 - [ ] Optional (from the 1.6 review, still open): restore the `MigrationSettings` docstring, rename `_required_asyncpg_driver` to `_require_asyncpg_driver`, replace the 0002 `Create Date` placeholder with `2026-11-22`, and restore the two `.env.example` comments for `SEED_USER_PASSWORD`.
 - [ ] Optional: use `SHA256_HEX` in the Refund idempotency CHECK (the regex is currently duplicated), and restore the 1.5b "why" comments, especially the `clock_timestamp()` one on `Message.created_at`.
+- [ ] Optional (from the 2.1 review, committed without them): restore the module docstring, the `set_config` comment, the `expire_on_commit` comment and the `tenant_session` docstring in `db/session.py`; update the `SNAPSHOT_QUERIES` comment in `tests/integration/test_migrations.py` to mention row-level security.
+- [ ] Optional (from the 2.2 review): the security comments in `app/auth.py` (pinned algorithm, dummy hash, worker thread, scope cap, fail-closed `except`), the `jwt_secret` comment in `app/config.py`, and the `openssl rand -hex 32` hint above `JWT_SECRET` in `.env.example`.
 - [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
 
 ## Next implementation step
 
-Commit Step 2.1, then Step 2.2: `app/auth.py` (Argon2 verification off the event loop, rehash on login, HS256 JWT issue and verify, `AuthContext`) and the JWT settings.
+Commit Step 2.2, then Step 2.3: `POST /auth/login` (tenant slug, email, password → token; one uniform 401 for every failure; rehash on login; `is_active`), `GET /auth/me`, and the session factory created in the lifespan.

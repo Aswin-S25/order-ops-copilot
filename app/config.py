@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr
     openai_model: str = Field(min_length=1)
 
+    jwt_secret: SecretStr = Field(min_length=32)
+    access_token_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+
     @field_validator("database_url")
     @classmethod
     def _require_asyncpg_driver(cls, value: SecretStr) -> SecretStr:

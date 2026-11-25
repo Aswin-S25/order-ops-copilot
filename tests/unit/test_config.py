@@ -8,13 +8,14 @@ VALID_ENV = {
     "REDIS_URL": "redis://localhost:6379/0",
     "OPENAI_API_KEY": "sk-test-not-a-real-key",
     "OPENAI_MODEL": "test-model",
+    "JWT_SECRET": "jwt-secret-not-a-real-signing-key",
 }
 
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     # Hermetic: values from the developer's shell must not change test outcomes.
-    for key in ("ENV", "LOG_LEVEL"):
+    for key in ("ENV", "LOG_LEVEL", "ACCESS_TOKEN_TTL_SECONDS"):
         monkeypatch.delenv(key, raising=False)
     for key, value in VALID_ENV.items():
         monkeypatch.setenv(key, value)
@@ -37,6 +38,7 @@ def test_secrets_are_masked_in_repr(env: pytest.MonkeyPatch) -> None:
     text = repr(load())
     assert "db-secret" not in text
     assert "sk-test-not-a-real-key" not in text
+    assert "jwt-secret-not-a-real-signing-key" not in text
 
 
 def test_rejects_sync_driver_without_leaking_password(env: pytest.MonkeyPatch) -> None:
@@ -56,6 +58,28 @@ def test_settings_are_immutable(env: pytest.MonkeyPatch) -> None:
     settings = load()
     with pytest.raises(ValidationError):
         settings.log_level = "DEBUG"
+
+
+def test_jwt_secret_is_required(env: pytest.MonkeyPatch) -> None:
+    env.delenv("JWT_SECRET")
+    with pytest.raises(ValidationError):
+        load()
+
+
+def test_short_jwt_secret_is_rejected_without_leaking_it(env: pytest.MonkeyPatch) -> None:
+    env.setenv("JWT_SECRET", "too-short-to-sign")
+    with pytest.raises(ValidationError) as exc_info:
+        load()
+    assert "too-short-to-sign" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("seconds", ["59", "3601"])
+def test_access_token_lifetime_is_bounded(env: pytest.MonkeyPatch, seconds: str) -> None:
+    # Too short and every request races its expiry; too long and a stolen token stays
+    # useful for hours, because tokens cannot be revoked (ADR-0004).
+    env.setenv("ACCESS_TOKEN_TTL_SECONDS", seconds)
+    with pytest.raises(ValidationError):
+        load()
 
 
 @pytest.mark.parametrize(

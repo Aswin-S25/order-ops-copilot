@@ -7,7 +7,7 @@ We need authentication for two roles across tenants without depending on an exte
 
 ## Decision
 - Passwords are hashed with Argon2id.
-- Access tokens are short-lived HS256 JWTs carrying `sub`, `tenant_id`, `role`, `scopes`, `exp`, `iat` and `jti`. The secret comes from the environment.
+- Access tokens are short-lived HS256 JWTs carrying `sub`, `tenant_id`, `role`, `scopes`, `exp`, `iat` and `jti`, plus `iss` and `aud` (added 2026-11-25, Step 2.2: a token minted for another service with the same key is refused). The algorithm is fixed by the verifier, never read from the token. The secret comes from the environment and must be at least 32 characters.
 - There are no refresh tokens initially.
 - All issuing and verification lives in `app/auth.py` behind an interface that produces an `AuthContext`, so an external identity provider (Auth0, Keycloak) can replace it later.
 

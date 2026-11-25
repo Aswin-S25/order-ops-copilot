@@ -26,6 +26,7 @@ def make_settings(**overrides: Any) -> Settings:
         "redis_url": "redis://127.0.0.1:6379/0",
         "openai_api_key": "sk-test",
         "openai_model": "test-model",
+        "jwt_secret": "unit-test-signing-key-not-a-real-secret",
         **overrides,
     }
     return Settings(_env_file=None, **values)
