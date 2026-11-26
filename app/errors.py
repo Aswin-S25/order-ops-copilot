@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any
+from typing import Any, ClassVar
 
 import structlog
 from fastapi import FastAPI, Request
@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 class AppError(Exception):
     status_code: int = 400
     code: str = "BAD_REQUEST"
+    headers: ClassVar[dict[str, str] | None] = None
 
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -21,6 +22,12 @@ class AppError(Exception):
 class NotFoundError(AppError):
     status_code = 404
     code = "NOT_FOUND"
+
+
+class AuthenticationError(AppError):
+    status_code = 401
+    code = "UNAUTHORIZED"
+    headers = {"WWW-Authenticate": "Bearer"}
 
 
 def error_response(
@@ -42,7 +49,9 @@ def error_response(
 
 
 async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message, details=exc.details)
+    return error_response(
+        exc.status_code, exc.code, exc.message, details=exc.details, headers=exc.headers
+    )
 
 
 async def _handle_http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:

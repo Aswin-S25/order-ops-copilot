@@ -16,8 +16,8 @@
 |---|---|---|---|---|
 | GET | `/health/live` | public | 1 | The process is up |
 | GET | `/health/ready` | public | 1 | Postgres and Redis are reachable |
-| POST | `/auth/login` | public | 2 | `{tenant_slug, email, password}` → `{access_token, expires_in}` (OD-1) |
-| GET | `/auth/me` | any | 2 | The current `AuthContext` |
+| POST | `/auth/login` | public | 2 | `{tenant_slug, email, password}` → `{access_token, token_type: "bearer", expires_in}` (OD-1). Slug and email are trimmed and lower-cased; unknown fields are rejected (422). Every failure is the same `401 UNAUTHORIZED` "Invalid credentials." Response carries `Cache-Control: no-store` |
+| GET | `/auth/me` | any | 2 | The current `AuthContext`: `{user_id, tenant_id, role, scopes}`, read from the token only. A missing, malformed, expired or foreign token is `401 UNAUTHORIZED` "Not authenticated." with `WWW-Authenticate: Bearer` |
 | GET | `/orders` | buyer (own), support (tenant) | 3 | Recent orders, paginated |
 | GET | `/orders/{id}` | same | 3 | |
 | GET | `/orders/{id}/shipment` | same | 3 | Includes recent events |

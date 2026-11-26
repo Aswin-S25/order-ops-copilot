@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app import health
+from app import auth_api, health
 from app.config import Settings, get_settings
 from app.errors import register_exception_handlers
 from app.lifespan import make_lifespan
@@ -20,4 +20,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
     app.add_middleware(RequestContextMiddleware)
     app.include_router(health.router)
+    app.include_router(auth_api.router)
     return app
