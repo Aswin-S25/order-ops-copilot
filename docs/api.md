@@ -19,7 +19,7 @@
 | POST | `/auth/login` | public | 2 | `{tenant_slug, email, password}` → `{access_token, token_type: "bearer", expires_in}` (OD-1). Slug and email are trimmed and lower-cased; unknown fields are rejected (422). Every failure is the same `401 UNAUTHORIZED` "Invalid credentials." Response carries `Cache-Control: no-store` |
 | GET | `/auth/me` | any | 2 | The current `AuthContext`: `{user_id, tenant_id, role, scopes}`, read from the token only. A missing, malformed, expired or foreign token is `401 UNAUTHORIZED` "Not authenticated." with `WWW-Authenticate: Bearer` |
 | GET | `/orders` | buyer (own), support (tenant) | 3 | Recent orders, paginated |
-| GET | `/orders/{id}` | same | 3 | |
+| GET | `/orders/{id}` | same | 2 | Scope `orders:read`. `{id, order_number, buyer_id, seller_name, status, total: Money, placed_at, delivered_at, items: [{sku, name, quantity, unit_price: Money}]}`. Another buyer's order, another tenant's order and an unknown id all return the same `404 NOT_FOUND` "Order not found." |
 | GET | `/orders/{id}/shipment` | same | 3 | Includes recent events |
 | GET | `/orders/{id}/refund-eligibility` | same | 3 | `{eligible, reasons[], refundable_remainder}` |
 | POST | `/conversations` | any | 4 | |

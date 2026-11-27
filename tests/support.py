@@ -2,9 +2,11 @@
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import MigrationSettings, Settings
 from db.engine import create_engine
+from db.seed import seed
 from db.session import create_session_factory, tenant_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -84,3 +87,18 @@ def query_as_tenant(tenant_id: uuid.UUID, sql: str, **params: Any) -> list[Any]:
             await engine.dispose()
 
     return asyncio.run(run())
+
+
+def seed_test_database(password: str) -> None:
+    """orderops_test at head, emptied, then seeded as app_user (the way production writes)."""
+    command.upgrade(alembic_config(owner_test_url()), "head")
+
+    async def run() -> None:
+        await empty_test_database()
+        engine = create_engine(integration_settings())
+        try:
+            await seed(engine, password=password, now=datetime.now(UTC))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 import structlog
@@ -6,9 +7,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.auth import AuthContext, TokenError, verify_access_token
+from app.auth import AuthContext, Scope, TokenError, verify_access_token
 from app.config import Settings
-from app.errors import AuthenticationError
+from app.errors import AuthenticationError, ForbiddenError
 
 logger = structlog.get_logger("app.auth")
 
@@ -51,3 +52,13 @@ async def get_auth_context(
 
 
 AuthDep = Annotated[AuthContext, Depends(get_auth_context)]
+
+
+def require_scope(scope: Scope) -> Callable[[AuthContext], Awaitable[AuthContext]]:
+    async def check(auth: AuthDep) -> AuthContext:
+        if scope not in auth.scopes:
+            logger.info("scope_denied", user_id=str(auth.user_id), scope=scope.value)
+            raise ForbiddenError("This account is not allowed to do that.")
+        return auth
+
+    return check

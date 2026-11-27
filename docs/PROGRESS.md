@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.3)**
+**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.4)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -109,8 +109,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 |---|---|---|
 | 2.1 | Row-level security: migration 0003 (ENABLE + FORCE + `tenant_isolation` policy on the 14 tenant-owned tables), `db/session.py` (`tenant_session`), RLS integration tests; existing tests made tenant-aware | ✅ Committed (`76e61dc`) |
 | 2.2 | `app/auth.py`: Argon2id verify (off the event loop) and rehash, HS256 JWT issue and verify, `AuthContext`; JWT settings | ✅ Committed (`0e890a7`) |
-| 2.3 | `POST /auth/login` via tenant slug (OD-1) with a uniform 401 for every failure, rehash on login, `GET /auth/me`, the Bearer `AuthContext` dependency (moved here from 2.4: `/auth/me` needs it), session factory in the lifespan | Typed and reviewed: 213 tests, 14/14 mutations caught on the user's code, dev login works. Awaiting commit |
-| 2.4 | Scope requirements per endpoint, ownership checks; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see | Pending |
+| 2.3 | `POST /auth/login` via tenant slug (OD-1) with a uniform 401 for every failure, rehash on login, `GET /auth/me`, the Bearer `AuthContext` dependency (moved here from 2.4: `/auth/me` needs it), session factory in the lifespan | ✅ Committed (`1eaeb53`) |
+| 2.4 | `require_scope` (403), `ForbiddenError`, the first service (`services/orders.py`: one ownership rule, application tenant filter as well as RLS), `seed_test_database` test helper; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see. `is_active` on sensitive endpoints is deferred to the first sensitive endpoint (refunds, Phase 3) | In progress: verified in scratch (225 tests; 9 of 10 mutations caught, the 10th equivalent by design) |
 | 2.5 | Security suite (cross-buyer, cross-tenant, missing filter, no context, token tampering) and the Phase 2 wrap-up | Pending |
 
 ## Implemented features
@@ -143,6 +143,10 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 - **2026-11-25: login (OD-1).** `authenticate()` reads `tenants` in a session with no tenant set (that table has no RLS; every other table shows zero rows there), then the user inside `tenant_session`. Every failure path (unknown tenant, unknown email, wrong password, inactive account) runs exactly one Argon2 verification and returns the same 401. The database transaction ends before Argon2 runs, so a slow hash never holds a pooled connection. An outdated hash is replaced on login with a compare-and-swap `UPDATE … WHERE password_hash = <the hash just verified>`, so a password changed meanwhile is never overwritten. Logs name the tenant slug or user id, never the email, password or token. `AppError` subclasses can carry response headers (`AuthenticationError` sends `WWW-Authenticate: Bearer`).
 
+- **2026-11-26: ownership lives in services, as a query filter.** `services/orders.visible_orders(auth)` is the single starting point for every order query: the tenant filter (repeating RLS, so either layer alone isolates tenants) plus, for every role except support, `buyer_id = caller`. Fail-closed for roles added later. The check is part of the query, not a check after fetching, so "not yours" and "does not exist" take the same path and return the same 404. Services return `None` for "not visible"; the API turns it into `NotFoundError` (services know nothing about HTTP). Routes open `tenant_session(sessions, auth.tenant_id)` explicitly rather than through a yield dependency, so the commit visibly happens before the response is built.
+- **2026-11-28: response tests pin the exact set of fields.** Pydantic silently drops keyword arguments a model does not declare, so a missing field in a response model is invisible unless a test asserts the key set. The same assertion catches a column exposed by accident (for example `buyer_note`). Every new response model gets one exact-keys assertion.
+- **2026-11-26: correction on `expire_on_commit=False`.** Without it, reading an attribute after the session block has closed raises `DetachedInstanceError` (seen in Step 2.4's mutation run), and reading one after a commit while the session is still open raises `MissingGreenlet` (an implicit async reload). Both are prevented by the setting.
+
 ## Database changes
 
 - 2026-11-22: Cluster initialised by the init script. Created roles `app_owner` and `app_user` (both NOSUPERUSER, NOBYPASSRLS), databases `orderops` and `orderops_test` (owned by `app_owner`, CONNECT revoked from PUBLIC), extension `vector` in both, and default privileges for `app_user`. No application tables yet.
@@ -168,6 +172,9 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.4 fix | Steps 1.1–1.4 suite (Docker up) | 25 passed; `db_connect_timeout_seconds=0` now rejected at startup |
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
+| 2026-11-26 | 2.4 (scratch) | `uv run pytest` / `-m "not integration"` · ruff | 225 passed / 181 passed, 44 deselected · clean |
+| 2026-11-28 | 2.4 (review) | Typed code vs. scratch · ruff · full suite · mutations · dev DB | `OrderResponse` was missing `delivered_at`, and all 225 tests still passed: Pydantic ignores the unknown keyword in `from_details`. Fix: `test_a_buyer_reads_their_own_order` now pins the exact response key set, `status` and a non-null `delivered_at` (fails on the gap, passes on the fix, also fails if `buyer_note` leaks). 11 mutations: 10 caught, 1 equivalent by design. Dev DB: asha 200 (9 fields), ravi 404, Alpha's meera 200, Beta's meera 404; no tokens or passwords in the logs |
+| 2026-11-26 | 2.4 (scratch) | Mutations: no buyer filter · role condition inverted · no application tenant filter · items not filtered by order · scope check removed · default `expire_on_commit` · a 404 message naming the id · 403 instead of 404 · the route requires the wrong scope · items query without its tenant filter | 9/10 caught ✅. The last is equivalent by design: the order is already tenant-checked, and that filter exists for the `(tenant_id, order_id)` index. Also not observable yet: dropping `require_scope` from the route, since both roles hold `orders:read` |
 | 2026-11-26 | 2.3 review | User's files vs. the verified code | Logic identical. Comments and docstrings left out (as agreed, only the essential ones are now shown). `verify_password(..., password=password)` is called by keyword, and the test's counting wrapper was renamed to match: consistent |
 | 2026-11-26 | 2.3 review | User's tree: ruff · `pytest -m "not integration"` · `pytest` · 14 mutations re-run | clean · 178 passed, 35 deselected · 213 passed · 14/14 caught ✅ |
 | 2026-11-26 | 2.3 review | Dev DB `orderops`, in-process app, password read from `.env` (never printed) | alpha asha → 200, buyer, 6 scopes · beta meera → 200, support, 7 scopes · wrong password → 401 UNAUTHORIZED ✅ |
@@ -228,11 +235,15 @@ None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it fo
 
 - [ ] Optional (from the 1.6 review, still open): restore the `MigrationSettings` docstring, rename `_required_asyncpg_driver` to `_require_asyncpg_driver`, replace the 0002 `Create Date` placeholder with `2026-11-22`, and restore the two `.env.example` comments for `SEED_USER_PASSWORD`.
 - [ ] Optional: use `SHA256_HEX` in the Refund idempotency CHECK (the regex is currently duplicated), and restore the 1.5b "why" comments, especially the `clock_timestamp()` one on `Message.created_at`.
+- [ ] Optional (from the 2.4 review): the comments in `services/orders.py` (above all the fail-closed role rule and the index-only items tenant filter), the docstrings and comments in `app/orders_api.py`, and the `require_scope` docstring.
 - [ ] Optional (from the 2.1 review, committed without them): restore the module docstring, the `set_config` comment, the `expire_on_commit` comment and the `tenant_session` docstring in `db/session.py`; update the `SNAPSHOT_QUERIES` comment in `tests/integration/test_migrations.py` to mention row-level security.
+- [ ] `is_active` is checked only at login; a deactivated user's token works until it expires (≤ 15 min, ADR-0004). Add the check to the first sensitive endpoint (refund request, Phase 3).
+- [ ] `Money` lives in `app/orders_api.py`; move it to a shared schemas module when a second endpoint needs it (Phase 3).
+- [ ] Optional: `tests/integration/test_rls.py` and `test_auth_api.py` could use `seed_test_database()` instead of their own seeding fixtures.
 - [ ] Login has no rate limit yet: Argon2's cost is the only brake on password guessing. Add per-account and per-IP limits with the shared Redis token buckets (worker phase).
 - [ ] Optional (from the 2.2 review): the security comments in `app/auth.py` (pinned algorithm, dummy hash, worker thread, scope cap, fail-closed `except`), the `jwt_secret` comment in `app/config.py`, and the `openssl rand -hex 32` hint above `JWT_SECRET` in `.env.example`.
 - [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
 
 ## Next implementation step
 
-Commit Step 2.3, then Step 2.4: scope requirements per endpoint (403), ownership in a services layer, `is_active` on sensitive endpoints, and the first protected read `GET /orders/{id}` (404 for anything the caller may not see).
+Step 2.4: the user adds `ForbiddenError`, `require_scope`, `services/orders.py`, `app/orders_api.py`, the `seed_test_database` helper, and the scope and orders tests. Then a review.
