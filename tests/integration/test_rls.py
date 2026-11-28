@@ -9,7 +9,7 @@ import pytest
 from alembic import command
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from db.base import Base
 from db.engine import create_engine
@@ -24,7 +24,7 @@ from tests.support import (
     query_as_tenant,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.security]
 
 ALPHA = seed_id("alpha-market")
 BETA = seed_id("beta-bazaar")
@@ -33,6 +33,14 @@ ORDERS_PER_TENANT = 8
 # these tests until a migration gives it RLS.
 TENANT_OWNED = sorted(t.name for t in Base.metadata.sorted_tables if "tenant_id" in t.c)
 RLS_VIOLATION = "violates row-level security policy"
+BYPASS_POWERS = """
+    SELECT
+        (SELECT bool_or(rolsuper OR rolbypassrls) FROM pg_roles
+         WHERE pg_has_role(current_user, oid, 'MEMBER')) AS skips_policies,
+        (SELECT count(*) FROM pg_tables
+         WHERE schemaname = 'public' AND pg_has_role(current_user, tableowner, 'MEMBER'))
+            AS owned_tables
+"""
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -82,6 +90,25 @@ def test_exactly_the_tenant_owned_tables_force_rls_with_a_policy() -> None:
     assert sorted(row.relname for row in forced) == TENANT_OWNED
     assert sorted(row.tablename for row in policies) == TENANT_OWNED
     assert "tenants" not in TENANT_OWNED  # login must read it before any tenant is known
+
+
+def test_the_runtime_role_cannot_bypass_rls() -> None:
+    # Policies do not apply to superusers or BYPASSRLS roles, and a table's owner can
+    # switch RLS off. The app's role must be none of these, itself or through a role it
+    # belongs to. app_owner is the control: the same query finds the tables it owns.
+    [runtime] = query_as_tenant(ALPHA, BYPASS_POWERS)
+
+    async def as_owner() -> Any:
+        engine = create_async_engine(owner_test_url())
+        try:
+            async with engine.connect() as conn:
+                return (await conn.execute(text(BYPASS_POWERS))).one()
+        finally:
+            await engine.dispose()
+
+    owner = asyncio.run(as_owner())
+    assert (runtime.skips_policies, runtime.owned_tables) == (False, 0)
+    assert owner.owned_tables >= len(TENANT_OWNED)
 
 
 def test_without_tenant_context_nothing_is_visible() -> None:

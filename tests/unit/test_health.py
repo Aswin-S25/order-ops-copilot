@@ -29,6 +29,7 @@ def test_live_does_not_check_dependencies() -> None:
     assert response.json() == {"status": "ok"}
 
 
+@pytest.mark.security
 def test_ready_returns_503_without_leaking_details() -> None:
     with TestClient(create_app(unreachable_settings())) as client:
         response = client.get("/health/ready")
@@ -40,6 +41,7 @@ def test_ready_returns_503_without_leaking_details() -> None:
     }
 
 
+@pytest.mark.security
 def test_failed_readiness_logs_do_not_contain_credentials(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

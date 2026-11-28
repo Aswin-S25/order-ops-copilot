@@ -1,6 +1,8 @@
 """GET /orders/{id}: who may see which order (roadmap Phase 2 exit criteria)."""
 
 import asyncio
+import base64
+import json
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -17,7 +19,7 @@ from db.session import create_session_factory, tenant_session
 from services import orders
 from tests.support import integration_settings, seed_test_database
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.security]
 
 PASSWORD = "orders-test-password"
 ALPHA_1001 = seed_id("alpha-market", "order", "ORD-1001")  # asha's
@@ -36,15 +38,18 @@ def client() -> Iterator[TestClient]:
         yield client
 
 
+def login(client: TestClient, slug: str, handle: str) -> str:
+    response = client.post(
+        "/auth/login",
+        json={"tenant_slug": slug, "email": f"{handle}@example.com", "password": PASSWORD},
+    )
+    return str(response.json()["access_token"])
+
+
 def get_order(client: TestClient, order_id: uuid.UUID, as_user: tuple[str, str] | None) -> Any:
     headers = {}
     if as_user is not None:
-        slug, handle = as_user
-        login = client.post(
-            "/auth/login",
-            json={"tenant_slug": slug, "email": f"{handle}@example.com", "password": PASSWORD},
-        )
-        headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+        headers["Authorization"] = f"Bearer {login(client, *as_user)}"
     return client.get(f"/orders/{order_id}", headers=headers)
 
 
@@ -114,6 +119,23 @@ def test_an_order_the_caller_may_not_see_does_not_exist(
 
 def test_an_order_needs_a_token(client: TestClient) -> None:
     assert get_order(client, ALPHA_1001, None).status_code == 401
+
+
+def test_a_token_edited_to_claim_another_buyer_is_rejected(client: TestClient) -> None:
+    # ravi keeps his real signature but rewrites the payload to say he is asha.
+    header, payload, signature = login(client, "alpha-market", "ravi").split(".")
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    claims["sub"] = str(seed_id("alpha-market", "user", "asha"))
+    edited = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+
+    def read_asha_order(token: str) -> int:
+        url = f"/orders/{ALPHA_1001}"
+        return client.get(url, headers={"Authorization": f"Bearer {token}"}).status_code
+
+    # His real token reaches the ownership check (404); the edited one is stopped before it
+    # (401). Without the signature check, the edited one would read asha's order (200).
+    assert read_asha_order(f"{header}.{payload}.{signature}") == 404
+    assert read_asha_order(f"{header}.{edited}.{signature}") == 401
 
 
 def test_the_service_filters_by_tenant_even_when_rls_would_not() -> None:

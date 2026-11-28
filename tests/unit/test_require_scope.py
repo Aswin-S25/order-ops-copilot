@@ -15,6 +15,8 @@ from app.main import create_app
 from db.models import UserRole
 from tests.support import make_settings
 
+pytestmark = pytest.mark.security
+
 SETTINGS = make_settings()
 TENANT = uuid.UUID(int=1)
 

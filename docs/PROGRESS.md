@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.4)**
+**Phase 2 — Auth and Isolation: IN PROGRESS (Step 2.5, the security suite; the wrap-up below awaits sign-off)**
 
 Working agreement: application code is shown in chat and typed in by hand. Only documentation is written directly to the repo.
 
@@ -90,6 +90,40 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
   - ownership checks
   - security tests: buyer A can't read buyer B's order; tenant A can't see tenant B even with a missing application filter; no tenant context means zero rows
 
+### Phase 2 — Auth and Isolation (wrap-up drafted 2026-11-28, awaiting sign-off)
+
+- **What we built:**
+  - Row-level security on the 14 tenant-owned tables (ENABLE + FORCE, one `tenant_isolation` policy), and `tenant_session()` as the only way to open a tenant-scoped transaction.
+  - Argon2id password checks (off the event loop, the same cost for unknown users) and HS256 access tokens with pinned algorithm, issuer, audience and required claims.
+  - `POST /auth/login` via tenant slug (OD-1) with one uniform 401, rehash on login, `GET /auth/me`.
+  - The Bearer `AuthContext` dependency, per-role scopes and `require_scope` (403).
+  - The first service, `services/orders.py`, with one ownership rule, and the first protected read, `GET /orders/{id}` (404 for anything the caller may not see).
+  - A named security suite: `uv run pytest -m security`.
+- **Concepts covered:**
+  - RLS: ENABLE vs. FORCE, USING vs. WITH CHECK, `NULLIF(current_setting(..., true), '')` to fail closed, transaction-local `set_config(..., true)` with pooled connections, and who bypasses RLS anyway (superusers, BYPASSRLS roles, table owners without FORCE).
+  - Passwords: Argon2id parameters and rehash, `asyncio.to_thread` for CPU-bound work, timing-safe unknown users (dummy hash), compare-and-swap updates.
+  - Tokens: why the server pins the algorithm (`alg: none`, algorithm confusion), `iss`/`aud`, required claims, scopes capped by the role, rejection reasons logged but never sent.
+  - 401 vs. 403 vs. 404, and the order they are checked in; ownership as part of the query, so "not yours" and "does not exist" are the same answer.
+  - Defence in depth only counts if each layer is tested alone (the application tenant filter vs. RLS).
+  - Fail-closed inventories: tables without RLS, routes without a token, roles not yet known (`is not SUPPORT`) all fail or restrict by default.
+  - SQLAlchemy async: `expire_on_commit=False`, `DetachedInstanceError` vs. `MissingGreenlet`.
+  - Testing: positive controls against vacuous passes, spies, patching where a name is used, simulated races, log-leak canaries, exact response key sets, mutation testing.
+- **Decisions:** see the decisions log for 2026-11-25 to 2026-11-28 (RLS policy, tokens, login, ownership in services, exact response fields, the security suite).
+- **Tests and results:**
+  - **230 tests** (184 unit, 46 integration); **74 in the security suite**; ruff clean.
+  - Mutation runs: 2.1 8/8, 2.2 14/14, 2.3 14/14, 2.4 10/11 (1 equivalent by design), 2.5 6/6.
+  - Roadmap exit criteria met:
+    - Buyer A can't read buyer B's order by id: `test_an_order_the_caller_may_not_see_does_not_exist[another-buyers-order]`, and end to end with an edited token: `test_a_token_edited_to_claim_another_buyer_is_rejected`.
+    - Tenant A can't see tenant B even with a missing application filter: `test_a_tenant_sees_only_its_own_rows_even_without_a_filter`, `test_another_tenants_row_is_invisible_even_by_its_id`, and the reverse (only the application filter working) in `test_the_service_filters_by_tenant_even_when_rls_would_not`.
+    - No tenant context means zero rows: `test_without_tenant_context_nothing_is_visible` (and writes rejected).
+  - Phase 0's open question "RLS when tests run as a superuser" is answered by `test_the_runtime_role_cannot_bypass_rls`: a superuser would skip every policy, so the role the app connects as is checked.
+- **Bugs caught in review:**
+  - Step 2.1: a seed test passed vacuously over zero rows once RLS hid them; fixed with tenant-scoped queries and a row count.
+  - Step 2.2: an unkillable mutant (`return known_user`) exposed a missing test (the dummy hash matching).
+  - Step 2.4: `OrderResponse` was missing `delivered_at` and every test still passed; fixed with an exact-keys assertion.
+- **Remaining issues:** none blocking. Open items under Pending tasks: `is_active` is checked only at login, no login rate limit yet, the API docs are public in every environment, and dropping only a route's scope (keeping the token check) is not observable until some role lacks `orders:read`.
+- **Next:** Phase 3, Domain services and tools: order, shipment and refund services (eligibility, remainder, locking), the email outbox, a mock carrier, policy ingestion with hybrid retrieval, the `ToolSpec` registry with strict schemas, the 7 tools, and the REST read endpoints.
+
 ## Phase 1 plan
 
 | Step | Scope | Status |
@@ -110,8 +144,8 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2.1 | Row-level security: migration 0003 (ENABLE + FORCE + `tenant_isolation` policy on the 14 tenant-owned tables), `db/session.py` (`tenant_session`), RLS integration tests; existing tests made tenant-aware | ✅ Committed (`76e61dc`) |
 | 2.2 | `app/auth.py`: Argon2id verify (off the event loop) and rehash, HS256 JWT issue and verify, `AuthContext`; JWT settings | ✅ Committed (`0e890a7`) |
 | 2.3 | `POST /auth/login` via tenant slug (OD-1) with a uniform 401 for every failure, rehash on login, `GET /auth/me`, the Bearer `AuthContext` dependency (moved here from 2.4: `/auth/me` needs it), session factory in the lifespan | ✅ Committed (`1eaeb53`) |
-| 2.4 | `require_scope` (403), `ForbiddenError`, the first service (`services/orders.py`: one ownership rule, application tenant filter as well as RLS), `seed_test_database` test helper; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see. `is_active` on sensitive endpoints is deferred to the first sensitive endpoint (refunds, Phase 3) | In progress: verified in scratch (225 tests; 9 of 10 mutations caught, the 10th equivalent by design) |
-| 2.5 | Security suite (cross-buyer, cross-tenant, missing filter, no context, token tampering) and the Phase 2 wrap-up | Pending |
+| 2.4 | `require_scope` (403), `ForbiddenError`, the first service (`services/orders.py`: one ownership rule, application tenant filter as well as RLS), `seed_test_database` test helper; the first protected read (`GET /orders/{id}`): 404 for anything the caller may not see. `is_active` on sensitive endpoints is deferred to the first sensitive endpoint (refunds, Phase 3) | ✅ Committed (`b3b3077`) |
+| 2.5 | Security suite: a `security` marker over the existing security tests (`uv run pytest -m security`), plus three new tests: every route needs a token unless it is on the public list; the runtime role cannot bypass RLS; an edited token cannot read another buyer's order end to end. Phase 2 wrap-up | Applied to the repo on request ("make the code change for this time"), uncommitted: 230 tests, 74 in the security suite; 6/6 mutations caught |
 
 ## Implemented features
 
@@ -145,6 +179,7 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 
 - **2026-11-26: ownership lives in services, as a query filter.** `services/orders.visible_orders(auth)` is the single starting point for every order query: the tenant filter (repeating RLS, so either layer alone isolates tenants) plus, for every role except support, `buyer_id = caller`. Fail-closed for roles added later. The check is part of the query, not a check after fetching, so "not yours" and "does not exist" take the same path and return the same 404. Services return `None` for "not visible"; the API turns it into `NotFoundError` (services know nothing about HTTP). Routes open `tenant_session(sessions, auth.tenant_id)` explicitly rather than through a yield dependency, so the commit visibly happens before the response is built.
 - **2026-11-28: response tests pin the exact set of fields.** Pydantic silently drops keyword arguments a model does not declare, so a missing field in a response model is invisible unless a test asserts the key set. The same assertion catches a column exposed by accident (for example `buyer_note`). Every new response model gets one exact-keys assertion.
+- **2026-11-28: the security suite is a pytest marker, not a separate folder.** `@pytest.mark.security` (or a module `pytestmark`) tags every test whose failure means a leak or a bypass, wherever it lives; `uv run pytest -m security` runs exactly those, and Phase 8's CI gate can require 100% of them. New in 2.5: `tests/unit/test_route_protection.py` calls every route without a token and expects 401, except an explicit `PUBLIC` list that must name only real routes; it walks routes with `fastapi.routing.iter_route_contexts` because FastAPI 0.165 keeps included routers as wrappers in `app.routes` (a positive control fails loudly if that walk changes). `test_the_runtime_role_cannot_bypass_rls` checks that the app's role, directly or through membership, is not a superuser, has no BYPASSRLS and owns no table, with `app_owner` as the control.
 - **2026-11-26: correction on `expire_on_commit=False`.** Without it, reading an attribute after the session block has closed raises `DetachedInstanceError` (seen in Step 2.4's mutation run), and reading one after a commit while the session is still open raises `MissingGreenlet` (an implicit async reload). Both are prevented by the setting.
 
 ## Database changes
@@ -173,6 +208,10 @@ Working agreement: application code is shown in chat and typed in by hand. Only 
 | 2026-11-22 | 1.5a (scratch) | Unit suite including structural model tests | 59 passed |
 | 2026-11-22 | 1.5a (scratch) | `create_all` on orderops_test as app_owner, 11 bad inserts, then rollback | All 11 rejected by the named constraint (cross-tenant FK ×2, currency mismatch, amount 0, key format, duplicate idempotency key, enum, uppercase email, lowercase currency, quantity 0, tenant delete). 0 tables remain afterwards |
 | 2026-11-26 | 2.4 (scratch) | `uv run pytest` / `-m "not integration"` · ruff | 225 passed / 181 passed, 44 deselected · clean |
+| 2026-11-28 | 2.5 (applied) | Verified files copied into the repo; the user's partial typing had `from pydantic import json` (an IDE auto-import) where `import json` was meant · ruff · suites | Tagged files gained only the 23 `@pytest.mark.security` lines · clean · 184 passed, 46 deselected / 74 security / 230 passed ✅ |
+| 2026-11-28 | 2.5 (scratch) | `uv run pytest` / `-m "not integration"` / `-m security` · ruff | 230 passed / 184 passed, 46 deselected / 74 passed, 156 deselected · clean |
+| 2026-11-28 | 2.5 (scratch) | Mutations: `/auth/me` without a token · a new route without a token · a hidden (`include_in_schema=False`) route without a token · a stale `PUBLIC` entry · walking `app.routes` directly · signature not verified | 6/6 caught ✅. With the signature unchecked, the edited token read asha's order (200), so the end-to-end test guards a real attack |
+| 2026-11-28 | 2.5 (scratch) | `BYPASS_POWERS` query as three roles (read-only) | app_user (False, 0) · app_owner (False, 16) · superuser (True, 16): the query tells them apart ✅ |
 | 2026-11-28 | 2.4 (review) | Typed code vs. scratch · ruff · full suite · mutations · dev DB | `OrderResponse` was missing `delivered_at`, and all 225 tests still passed: Pydantic ignores the unknown keyword in `from_details`. Fix: `test_a_buyer_reads_their_own_order` now pins the exact response key set, `status` and a non-null `delivered_at` (fails on the gap, passes on the fix, also fails if `buyer_note` leaks). 11 mutations: 10 caught, 1 equivalent by design. Dev DB: asha 200 (9 fields), ravi 404, Alpha's meera 200, Beta's meera 404; no tokens or passwords in the logs |
 | 2026-11-26 | 2.4 (scratch) | Mutations: no buyer filter · role condition inverted · no application tenant filter · items not filtered by order · scope check removed · default `expire_on_commit` · a 404 message naming the id · 403 instead of 404 · the route requires the wrong scope · items query without its tenant filter | 9/10 caught ✅. The last is equivalent by design: the order is already tenant-checked, and that filter exists for the `(tenant_id, order_id)` index. Also not observable yet: dropping `require_scope` from the route, since both roles hold `orders:read` |
 | 2026-11-26 | 2.3 review | User's files vs. the verified code | Logic identical. Comments and docstrings left out (as agreed, only the essential ones are now shown). `verify_password(..., password=password)` is called by keyword, and the test's counting wrapper was renamed to match: consistent |
@@ -240,10 +279,12 @@ None open. Step 1.5b review findings fixed on 2026-11-22 (by request, "fix it fo
 - [ ] `is_active` is checked only at login; a deactivated user's token works until it expires (≤ 15 min, ADR-0004). Add the check to the first sensitive endpoint (refund request, Phase 3).
 - [ ] `Money` lives in `app/orders_api.py`; move it to a shared schemas module when a second endpoint needs it (Phase 3).
 - [ ] Optional: `tests/integration/test_rls.py` and `test_auth_api.py` could use `seed_test_database()` instead of their own seeding fixtures.
+- [ ] `/docs`, `/redoc` and `/openapi.json` are public in every environment (listed in `PUBLIC` on purpose). Decide whether to switch them off outside dev (production hardening, Phase 9).
+- [ ] Dropping only a route's scope (keeping the token check) is not observable yet: every role holds `orders:read`. The first endpoint some role may not call (refund approval, Phase 3 or 7) makes it testable.
 - [ ] Login has no rate limit yet: Argon2's cost is the only brake on password guessing. Add per-account and per-IP limits with the shared Redis token buckets (worker phase).
 - [ ] Optional (from the 2.2 review): the security comments in `app/auth.py` (pinned algorithm, dummy hash, worker thread, scope cap, fail-closed `except`), the `jwt_secret` comment in `app/config.py`, and the `openssl rand -hex 32` hint above `JWT_SECRET` in `.env.example`.
 - [ ] Optional: restore the four "why" comments in errors.py and middleware.py (validation input omission, no Exception handler, untrusted request id, not BaseHTTPMiddleware). Recommended in the review but not restored.
 
 ## Next implementation step
 
-Step 2.4: the user adds `ForbiddenError`, `require_scope`, `services/orders.py`, `app/orders_api.py`, the `seed_test_database` helper, and the scope and orders tests. Then a review.
+Step 2.5 is in the working tree (applied on request, uncommitted). The user commits it, then signs off Phase 2 (Phase 3 does not start without it).

@@ -44,6 +44,7 @@ A_DAY_AGO = datetime.now(UTC) - timedelta(days=1)
 OTHER_KEY = SecretStr("a-different-signing-key-entirely-0123456789")
 
 
+@pytest.mark.security
 @pytest.mark.parametrize(
     "authorization",
     [
@@ -72,6 +73,7 @@ def test_every_rejected_token_gets_the_same_401(
     }
 
 
+@pytest.mark.security
 def test_a_rejected_token_is_logged_by_reason_never_by_value(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

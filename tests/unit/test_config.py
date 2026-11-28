@@ -34,6 +34,7 @@ def test_loads_valid_environment(env: pytest.MonkeyPatch) -> None:
     assert settings.database_url.get_secret_value().endswith("/orderops")
 
 
+@pytest.mark.security
 def test_secrets_are_masked_in_repr(env: pytest.MonkeyPatch) -> None:
     text = repr(load())
     assert "db-secret" not in text
@@ -41,6 +42,7 @@ def test_secrets_are_masked_in_repr(env: pytest.MonkeyPatch) -> None:
     assert "jwt-secret-not-a-real-signing-key" not in text
 
 
+@pytest.mark.security
 def test_rejects_sync_driver_without_leaking_password(env: pytest.MonkeyPatch) -> None:
     env.setenv("DATABASE_URL", "postgresql://app_user:db-secret@localhost:5432/orderops")
     with pytest.raises(ValidationError) as exc_info:
@@ -66,6 +68,7 @@ def test_jwt_secret_is_required(env: pytest.MonkeyPatch) -> None:
         load()
 
 
+@pytest.mark.security
 def test_short_jwt_secret_is_rejected_without_leaking_it(env: pytest.MonkeyPatch) -> None:
     env.setenv("JWT_SECRET", "too-short-to-sign")
     with pytest.raises(ValidationError) as exc_info:
@@ -93,12 +96,14 @@ def test_zero_timeouts_are_rejected(env: pytest.MonkeyPatch, variable: str) -> N
         load()
 
 
+@pytest.mark.security
 def test_runtime_settings_never_carry_the_owner_credential() -> None:
     # ADR-0003: the API and workers run as app_user. Even when DATABASE_OWNER_URL is in
     # the environment, the runtime Settings object has no field that could load it.
     assert "database_owner_url" not in Settings.model_fields
 
 
+@pytest.mark.security
 def test_migration_settings_reject_sync_driver_without_leaking_password(
     env: pytest.MonkeyPatch,
 ) -> None:

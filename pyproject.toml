@@ -34,6 +34,7 @@ pythonpath = ["."]
 addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
     "integration: needs the Docker Compose stack (Postgres + Redis)",
+    "security: the security suite (run alone with -m security); must pass 100%",
 ]
 
 [tool.ruff]

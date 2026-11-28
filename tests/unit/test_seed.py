@@ -64,6 +64,7 @@ def test_shipment_last_event_at_is_its_latest_event() -> None:
         assert shipment["last_event_at"] == max(times, default=None)
 
 
+@pytest.mark.security
 def test_refuses_to_seed_production_before_connecting() -> None:
     with pytest.raises(SystemExit, match="ENV=prod"):
         asyncio.run(main(make_settings(env="prod")))

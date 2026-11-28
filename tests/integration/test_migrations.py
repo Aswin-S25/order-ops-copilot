@@ -109,6 +109,7 @@ def test_models_and_migrations_agree(at_head: None) -> None:
     assert run_as_owner(diff) == []
 
 
+@pytest.mark.security
 @pytest.mark.parametrize(
     "statement",
     [

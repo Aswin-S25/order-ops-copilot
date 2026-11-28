@@ -105,6 +105,7 @@ def test_login_returns_a_token_that_identifies_the_user(client: TestClient) -> N
     assert (caller["tenant_id"], caller["role"]) == (str(ALPHA), "buyer")
 
 
+@pytest.mark.security
 def test_the_same_email_in_another_tenant_is_another_account(client: TestClient) -> None:
     callers = [
         me(client, login(client, slug, "asha@example.com").json()["access_token"])
@@ -118,6 +119,7 @@ def test_email_and_tenant_slug_are_normalised(client: TestClient) -> None:
     assert login(client, " Alpha-Market ", "  ASHA@Example.com ").status_code == 200
 
 
+@pytest.mark.security
 @pytest.mark.parametrize(
     ("slug", "email", "password"),
     [
@@ -182,6 +184,7 @@ def test_an_upgrade_never_overwrites_a_password_changed_meanwhile(
     assert stored_hash(BETA, "meera") == changed
 
 
+@pytest.mark.security
 def test_login_logs_never_contain_the_email_or_password(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

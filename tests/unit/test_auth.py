@@ -38,6 +38,7 @@ PASSWORD = "correct horse battery staple"
 # --- Scopes ------------------------------------------------------------------------------
 
 
+@pytest.mark.security
 def test_scopes_per_role_match_the_architecture_table() -> None:
     # Written out in full on purpose: changing who may do what must be a deliberate edit
     # here as well as in app/auth.py.
@@ -91,16 +92,19 @@ def test_the_right_password_verifies_and_a_wrong_one_does_not() -> None:
     assert asyncio.run(run()) == (True, False)
 
 
+@pytest.mark.security
 def test_a_corrupt_stored_hash_fails_closed() -> None:
     assert asyncio.run(verify_password("not-an-argon2-hash", PASSWORD)) is False
 
 
+@pytest.mark.security
 def test_an_unknown_user_costs_a_full_verification(spy: SpyHasher) -> None:
     # Returning early would answer "no such email" faster than "wrong password".
     assert asyncio.run(verify_password(None, PASSWORD)) is False
     assert len(spy.verified) == 1
 
 
+@pytest.mark.security
 def test_an_unknown_user_is_rejected_even_if_the_dummy_hash_matches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -186,6 +190,7 @@ ONE_HOUR_AGO = datetime.now(UTC) - timedelta(hours=1)
 IN_ONE_HOUR = datetime.now(UTC) + timedelta(hours=1)
 
 
+@pytest.mark.security
 @pytest.mark.parametrize(
     "token",
     [
@@ -213,6 +218,7 @@ def test_untrustworthy_tokens_are_rejected(token: str) -> None:
         verify_access_token(token, secret=SECRET)
 
 
+@pytest.mark.security
 def test_a_token_edited_after_signing_is_rejected() -> None:
     # Keep the buyer's real signature, swap in a payload that says "support".
     header, _, signature = issue_access_token(BUYER, secret=SECRET, ttl=TTL).split(".")

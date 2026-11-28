@@ -73,6 +73,7 @@ def test_one_email_is_two_separate_accounts(seed_runs: SeedRuns) -> None:
     assert len(set(ids)) == 2
 
 
+@pytest.mark.security
 def test_passwords_are_stored_as_argon2id_hashes(seed_runs: SeedRuns) -> None:
     hashes = [
         row.password_hash

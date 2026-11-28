@@ -83,6 +83,7 @@ def test_wrong_method_keeps_allow_header(client: TestClient) -> None:
     assert "GET" in response.headers["Allow"]
 
 
+@pytest.mark.security
 def test_validation_error_does_not_echo_input(client: TestClient) -> None:
     response = client.post("/_test/items", json={"name": "x", "quantity": "not-a-number"})
     assert response.status_code == 422
@@ -92,6 +93,7 @@ def test_validation_error_does_not_echo_input(client: TestClient) -> None:
     assert "not-a-number" not in response.text
 
 
+@pytest.mark.security
 def test_unhandled_exception_returns_safe_500(client: TestClient) -> None:
     response = client.get("/_test/boom")
     assert response.status_code == 500
